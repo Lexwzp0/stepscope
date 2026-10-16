@@ -10,33 +10,67 @@ Probe file: JSON lines, one multiple-choice item per line::
 
 Rendering is deterministic: instruction + question + "A. option" lines + answer prefix.
 The option *labels* ("A", "B", ...) are rendered as the next token after the answer
-prefix via ``label_format`` and must be single tokens in that context (checked by
-``scoring.resolve_options``).
+prefix via ``label_format`` and must be single tokens in that context (checked on the
+full prompt by ``scoring.encode_probes``).
+
+With ``chat_template=True`` the user text is wrapped by the tokenizer's chat template
+(``enable_thinking`` passed through when the template accepts it, a frozen date shadowing
+``strftime_now`` so prompts do not change daily), then ``no_think_suffix`` (e.g. an empty
+<think></think> block) and ``answer_prefix`` are appended — the protocol frozen by ood_ld's
+J06 ``template.json`` loads directly via ``RenderConfig.from_protocol``.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from ..core.model import ProbeItem, ProbeSet
 
-DEFAULT_INSTRUCTION = "Answer the following multiple choice question with the letter of the correct option."
+DEFAULT_INSTRUCTION = "Answer the following multiple-choice question."
 DEFAULT_LABELS = ("A", "B", "C", "D", "E", "F", "G", "H")
+
+
+def fixed_strftime(date: str):
+    """Stand-in for a chat template's ``strftime_now`` that always formats ``date`` (YYYY-MM-DD)."""
+    d = datetime.strptime(date, "%Y-%m-%d")
+    return lambda fmt: d.strftime(fmt)
 
 
 @dataclass(frozen=True)
 class RenderConfig:
     instruction: str = DEFAULT_INSTRUCTION
     labels: tuple[str, ...] = DEFAULT_LABELS
-    answer_prefix: str = "\nAnswer:"     # appended after the options; scoring happens at the next token
-    label_format: str = " {label}"       # how a label appears as the next token after answer_prefix
+    answer_prefix: str = "\nAnswer:"     # appended last; scoring happens at the next token
+    label_format: str = " {label}"       # "{label}" or positional "{}" (ood_ld style)
     chat_template: bool = False          # wrap the user text with the tokenizer's chat template
     system: str | None = None
+    enable_thinking: bool | None = None  # passed to apply_chat_template when not None
+    no_think_suffix: str = ""            # appended after the generation prompt (before answer_prefix)
+    fixed_date: str | None = None        # YYYY-MM-DD; shadows the template's strftime_now
 
     def label_tokens(self, k: int) -> list[str]:
-        return [self.label_format.format(label=lab) for lab in self.labels[:k]]
+        if k > len(self.labels):
+            raise ValueError(f"{k} options but only {len(self.labels)} labels")
+        return [self.label_format.format(lab, label=lab) for lab in self.labels[:k]]
+
+    @classmethod
+    def from_protocol(cls, path: str | Path, **overrides) -> "RenderConfig":
+        """Load the direct-scoring protocol frozen by ood_ld ``check_template.py`` (template.json)."""
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        d = doc.get("direct", doc)
+        kw = dict(chat_template=True)
+        if "answer_prefix" in d: kw["answer_prefix"] = d["answer_prefix"]
+        if "label_format" in d: kw["label_format"] = d["label_format"]
+        if d.get("labels"): kw["labels"] = tuple(d["labels"])
+        if "enable_thinking" in d: kw["enable_thinking"] = bool(d["enable_thinking"])
+        if d.get("no_think_suffix"): kw["no_think_suffix"] = d["no_think_suffix"]
+        if d.get("fixed_date"): kw["fixed_date"] = d["fixed_date"]
+        if doc.get("instruction"): kw["instruction"] = doc["instruction"]
+        kw.update({k: v for k, v in overrides.items() if v is not None})
+        return cls(**kw)
 
 
 def load_probe_file(path: str | Path, name: str | None = None) -> ProbeSet:
@@ -65,6 +99,19 @@ def load_probe_file(path: str | Path, name: str | None = None) -> ProbeSet:
     return ProbeSet(name=name or path.stem, version=version, items=items, source_path=str(path))
 
 
+def item_rank(item_id: str, salt: str = "stepscope_select") -> int:
+    return int(hashlib.sha1(f"{salt}:{item_id}".encode()).hexdigest()[:8], 16)
+
+
+def select_items(ps: ProbeSet, max_items: int | None) -> ProbeSet:
+    """Deterministic subset by id hash (same subset on every machine); version records the selection."""
+    if max_items is None or max_items >= len(ps.items):
+        return ps
+    chosen = sorted(ps.items, key=lambda it: item_rank(it.id))[:max_items]
+    chosen.sort(key=lambda it: ps.items.index(it))
+    return replace(ps, items=chosen, version=f"{ps.version}-n{max_items}")
+
+
 def format_mcq(item: ProbeItem, cfg: RenderConfig) -> str:
     if len(item.options) > len(cfg.labels):
         raise ValueError(f"item {item.id}: {len(item.options)} options but only {len(cfg.labels)} labels")
@@ -76,13 +123,22 @@ def format_mcq(item: ProbeItem, cfg: RenderConfig) -> str:
 def render_item(item: ProbeItem, cfg: RenderConfig, tokenizer=None) -> str:
     """Full prompt ending with the answer prefix (the next token is the answer slot)."""
     user = format_mcq(item, cfg)
-    if cfg.chat_template:
-        if tokenizer is None:
-            raise ValueError("chat_template=True needs a tokenizer")
-        msgs = ([{"role": "system", "content": cfg.system}] if cfg.system else []) + [{"role": "user", "content": user}]
-        rendered = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-        return rendered + cfg.answer_prefix.lstrip("\n")
-    return user + cfg.answer_prefix
+    if not cfg.chat_template:
+        return user + cfg.answer_prefix
+    if tokenizer is None:
+        raise ValueError("chat_template=True needs a tokenizer")
+    msgs = ([{"role": "system", "content": cfg.system}] if cfg.system else []) + [{"role": "user", "content": user}]
+    kw = dict(tokenize=False, add_generation_prompt=True)
+    if cfg.fixed_date:
+        kw["strftime_now"] = fixed_strftime(cfg.fixed_date)
+    if cfg.enable_thinking is not None:
+        try:
+            rendered = tokenizer.apply_chat_template(msgs, enable_thinking=cfg.enable_thinking, **kw)
+        except TypeError:
+            rendered = tokenizer.apply_chat_template(msgs, **kw)
+    else:
+        rendered = tokenizer.apply_chat_template(msgs, **kw)
+    return rendered + cfg.no_think_suffix + cfg.answer_prefix
 
 
 def render_all(items: list[ProbeItem], cfg: RenderConfig, tokenizer=None) -> list[str]:

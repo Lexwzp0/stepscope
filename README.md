@@ -39,7 +39,22 @@ verl outputs: `stepscope ingest <default_local_dir> --out store [--run-id R]` sc
 writes `store/R/run.json` (usable checkpoints, pending ones with the `verl.model_merger` command), then
 `stepscope interval --run store/R/run.json --steps 100 200 --probes ... --out store`.
 
+Run identity: the default `run_id` is `<training run>__<from>_<to>`, derived from
+`.../<run>/global_step_<N>/actor/huggingface`, so verl exports (both ending in `huggingface`) never collide.
+Several intervals may share one `run_id`: tables are stored per interval, and each
+`report_<from>_<to>.html` / `interval_<from>_<to>.json` shows only its own interval and probe version
+(`report.html` / `interval.json` are copies of the latest). `stepscope report <run_dir> --interval 0_10` re-renders one.
+
 Probe file (JSON lines): `{"id": ..., "domain": ..., "question": ..., "options": [...], "answer_idx": k}`.
+`stepscope probes convert <build_mcq_rows.jsonl> --out probes.jsonl [--split dev] [--rotations all|first]`
+converts ood_ld `build_mcq.py` rows (`source` → `domain`; `item_id`, `rotation`, `split` kept; option order and
+`answer_idx` untouched). `--max-items N` takes a deterministic subset by id hash.
+
+Rendering protocol: `--protocol template.json` loads the direct-scoring protocol frozen by ood_ld
+`check_template.py` (chat template on, `enable_thinking=False`, empty think block suffix, answer prefix,
+label format, frozen date so the prompt does not change daily); the same fields are available as flags
+(`--chat-template --no-thinking --no-think-suffix ... --answer-prefix ... --label-format " {label}" --fixed-date YYYY-MM-DD`).
+`interval.json` records the render config, option token ids, `‖Δθ‖` per layer group, timings and peak memory.
 Observables: `phi_fmt = log Σ_options p(label)` (answers in the required form) and
 `phi_ans = log p(correct) − log Σ_wrong p(label)` (correct vs wrong inside the option set), both at the
 answer slot after `--answer-prefix`. Labels are resolved on the full rendered prompt item by item and

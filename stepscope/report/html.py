@@ -1,4 +1,6 @@
-"""Static HTML report for chain one (blueprint §十四.5). Reads tables + interval.json only; no external assets."""
+"""Static HTML report for chain one (blueprint §十四.5). Reads tables + interval.json only; no external
+assets. The report shows ONE interval: rows are filtered by (step_from, step_to, probe_set, probe_version)
+taken from ``meta`` so several intervals stored under one run_id never mix."""
 from __future__ import annotations
 
 import html
@@ -58,12 +60,19 @@ def scatter_svg(xs, ys, labels, title: str, note: str, size: int = 360, pad: int
     return "\n".join(out)
 
 
+def _select(rows, **keys):
+    return [r for r in rows if all(r.get(k) == v for k, v in keys.items() if v is not None)]
+
+
 def render_report(store: Store, run_id: str, meta: dict, out_path: str | Path) -> Path:
-    effects = store.read(run_id, "effects").to_pylist()
-    behavior = store.read(run_id, "behavior").to_pylist()
-    cons = store.read(run_id, "consistency").to_pylist()
+    step_from, step_to = meta.get("step_from"), meta.get("step_to")
+    probe_set, probe_version = meta.get("probe_set"), meta.get("probe_version")
+    sel = dict(step_from=step_from, step_to=step_to, probe_set=probe_set, probe_version=probe_version)
+    effects = _select(store.read(run_id, "effects").to_pylist(), **sel)
+    cons = _select(store.read(run_id, "consistency").to_pylist(), **sel)
+    behavior = [r for r in _select(store.read(run_id, "behavior").to_pylist(), probe_set=probe_set, probe_version=probe_version)
+                if r["step"] in (step_from, step_to)]
     observables = sorted({r["observable"] for r in effects})
-    step_from = meta.get("step_from"); step_to = meta.get("step_to")
 
     # --- per-domain table
     acc = defaultdict(lambda: defaultdict(list))   # domain -> step -> scores
@@ -85,7 +94,8 @@ def render_report(store: Store, run_id: str, meta: dict, out_path: str | Path) -
         for o in observables:
             pairs = eff[d].get(o, [])
             ma = sum(p[0] for p in pairs) / len(pairs) if pairs else float("nan")
-            mp = sum(p[1] for p in pairs if not math.isnan(p[1])) / max(1, sum(1 for p in pairs if not math.isnan(p[1]))) if pairs else float("nan")
+            fin = [p[1] for p in pairs if not math.isnan(p[1])]
+            mp = sum(fin) / len(fin) if fin else float("nan")
             cells += f"<td>{_fmt(ma)}</td><td>{_fmt(mp)}</td>"
         rows_html.append(f"<tr>{cells}</tr>")
     domain_table = f"<table>{head}{''.join(rows_html)}</table>"
@@ -96,8 +106,11 @@ def render_report(store: Store, run_id: str, meta: dict, out_path: str | Path) -
     for o in observables:
         rs = [r for r in effects if r["observable"] == o]
         c = cons_by_obs.get(o, {})
+        ratio = float("nan")
+        if c.get("resid_rms") is not None and c.get("actual_rms"):
+            ratio = c["resid_rms"] / c["actual_rms"]
         note = (f"n={c.get('n','–')}  corr={_fmt(c.get('corr'),3)}  sign agree={_fmt(c.get('sign_agree'),3)}  "
-                f"resid RMS/actual RMS={_fmt((c.get('resid_rms') or float('nan'))/(c.get('actual_rms') or float('nan')),3)}")
+                f"resid RMS/actual RMS={_fmt(ratio,3)}")
         plots.append(scatter_svg([r["actual"] for r in rs], [r["first_order"] for r in rs], [r["item"] for r in rs],
                                  f"{o}: prediction calibration", note))
     plots_html = "<div class='row'>" + "".join(plots) + "</div>"
@@ -111,9 +124,11 @@ def render_report(store: Store, run_id: str, meta: dict, out_path: str | Path) -
     item_table = ("<table><tr><th class='l'>item</th><th class='l'>domain</th><th class='l'>observable</th><th>Φ_from</th><th>Φ_to</th>"
                   "<th>actual</th><th>first-order</th><th>residual</th></tr>" + item_rows + "</table>")
 
-    meta_rows = "".join(f"<tr><td class='l'><b>{html.escape(str(k))}</b></td><td>{html.escape(str(v))}</td></tr>" for k, v in meta.items())
-    doc = f"""<!doctype html><html><head><meta charset='utf-8'><title>StepScope · {html.escape(run_id)}</title><style>{CSS}</style></head>
-<body><h1>StepScope · interval report · {html.escape(run_id)}</h1>
+    meta_rows = "".join(f"<tr><td class='l'><b>{html.escape(str(k))}</b></td><td>{html.escape(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v))}</td></tr>"
+                        for k, v in meta.items())
+    title = f"interval {step_from} → {step_to} · {probe_set} ({probe_version})"
+    doc = f"""<!doctype html><html><head><meta charset='utf-8'><title>StepScope · {html.escape(run_id)} · {html.escape(title)}</title><style>{CSS}</style></head>
+<body><h1>StepScope · {html.escape(run_id)} · {html.escape(title)}</h1>
 <table class='meta'>{meta_rows}</table>
 <h2>1. Capability change by domain</h2>{domain_table}
 <p class='note'>acc = mean of argmax-in-set correctness over the probe items of the domain at each checkpoint.</p>
@@ -121,15 +136,19 @@ def render_report(store: Store, run_id: str, meta: dict, out_path: str | Path) -
 <p class='note'>Dashed line is y = x. Between checkpoints Δθ is the net effect of many optimizer steps; the first-order
 term is a first-order approximation of that net update, used for trajectories and a coarse consistency check only.
 No per-source attribution is implied. Low correlation or large residuals on real intervals are a result, not a failure.</p>
-<h2>3. Items sorted by |actual| (top {len(top)} of {len(effects)} rows; full data in effects/*.parquet)</h2>{item_table}
+<h2>3. Items sorted by |actual| (top {len(top)} of {len(effects)} rows of this interval; full data in effects/*.parquet)</h2>{item_table}
 </body></html>"""
     out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc, encoding="utf-8")
     return out_path
 
 
-def render(run_dir: str, out_html: str) -> Path:
+def render(run_dir: str, out_html: str, interval: str | None = None) -> Path:
+    """Re-render from a run directory. ``interval`` = "<from>_<to>" picks interval_<from>_<to>.json; default latest."""
     run_dir = Path(run_dir)
-    meta_path = run_dir / "interval.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    meta_path = run_dir / (f"interval_{interval}.json" if interval else "interval.json")
+    if not meta_path.exists():
+        raise FileNotFoundError(meta_path)
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     return render_report(Store(run_dir.parent), run_dir.name, meta.get("summary", meta), out_html)
