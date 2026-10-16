@@ -37,6 +37,7 @@ class Run:
     code_version: str
     checkpoints: list[Checkpoint] = field(default_factory=list)
     source_log_path: Optional[str] = None  # per-step (sample -> domain/teacher/weight)
+    meta: dict = field(default_factory=dict)  # framework-specific scan details (pending merges, roots)
 
 
 @dataclass(frozen=True)

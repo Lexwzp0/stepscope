@@ -43,5 +43,5 @@ def test_registries_populate_on_import():
 def test_cli_parses_all_commands():
     from stepscope.cli.main import build_parser
     p = build_parser()
-    assert p.parse_args(["ingest", "runs/x"]).cmd == "ingest"
+    assert p.parse_args(["ingest", "runs/x", "--out", "store"]).cmd == "ingest"
     assert p.parse_args(["analyze", "run0", "--study", "ood_spillover"]).study == "ood_spillover"

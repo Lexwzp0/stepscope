@@ -35,6 +35,10 @@ Outputs under `store/<run_id>/`:
 | `interval.json` | inputs, hashes, steps, render config, option token ids, `‖Δθ‖` per layer group, timings |
 | `report.html` | capability change by domain, prediction-calibration scatter, items by \|actual\| |
 
+verl outputs: `stepscope ingest <default_local_dir> --out store [--run-id R]` scans `global_step_*/actor/huggingface`,
+writes `store/R/run.json` (usable checkpoints, pending ones with the `verl.model_merger` command), then
+`stepscope interval --run store/R/run.json --steps 100 200 --probes ... --out store`.
+
 Probe file (JSON lines): `{"id": ..., "domain": ..., "question": ..., "options": [...], "answer_idx": k}`.
 Observables: `phi_fmt = log Σ_options p(label)` (answers in the required form) and
 `phi_ans = log p(correct) − log Σ_wrong p(label)` (correct vs wrong inside the option set), both at the
