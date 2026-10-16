@@ -1,6 +1,6 @@
 # StepScope
 
-**A research toolkit for post-training dynamics.**
+**See how model updates change behavior.** A research toolkit for post-training dynamics.
 
 [![tests](https://github.com/Lexwzp0/stepscope/actions/workflows/tests.yml/badge.svg)](https://github.com/Lexwzp0/stepscope/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
