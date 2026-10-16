@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use StepScope in your research, please cite it as below."
+title: "StepScope: a research toolkit for post-training dynamics"
+type: software
+authors:
+  - family-names: Wang
+    given-names: Zepeng
+version: 0.1.0
+date-released: 2026-10-17
+license: MIT
+repository-code: "https://github.com/Lexwzp0/stepscope"
+abstract: >-
+  StepScope treats one real parameter update as the basic object of study: for any backbone,
+  post-training objective and optimizer it measures the actual change of differentiable
+  observables between checkpoints, predicts it to first order along the measured update, and
+  reports the calibration of that prediction. Per-source decomposition, LDCL interaction
+  channels, behaviour and representation analyses are plugins on fixed tables.
