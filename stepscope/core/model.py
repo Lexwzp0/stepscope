@@ -66,23 +66,25 @@ class UpdatePackage:
     gradients_ref: Optional[str] = None  # per-source / per-sample gradients captured by dattri-llm
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ProbeItem:
+    """One multiple-choice probe item. ``options`` are already in display order; ``answer_idx`` indexes them."""
     id: str
     domain: str
-    prompt: str
-    options: Optional[tuple[str, ...]] = None
-    answer: Optional[str] = None
-    answer_prefix: str = ""
+    question: str
+    options: tuple[str, ...]
+    answer_idx: int
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
 class ProbeSet:
     name: str
-    version: str
+    version: str          # content hash of the probe file
     items: list[ProbeItem]
-    frozen_date: str
-    template_hash: str
+    source_path: str = ""
+    frozen_date: str = ""
+    template_hash: str = ""
 
 
 @dataclass(frozen=True)

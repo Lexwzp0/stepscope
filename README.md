@@ -11,10 +11,46 @@ counterfactual data-intervention estimates — is an analysis plugin that writes
 to fixed tables, with a consistency table that checks predictions against the
 real update.
 
-Status: skeleton only (2026-10-17). Interfaces, data model and table schemas are
-defined; implementations are `NotImplementedError`. The design blueprint lives
-in the parent workspace (`../设计.md`, Chinese); this README will be rewritten
-from it when the first study runs end to end.
+Status (2026-10-17): chain one works end to end; everything else is interface
+and stubs. The design blueprint lives in the parent workspace (`../设计.md`,
+Chinese).
+
+## Chain one: two checkpoints → actual change, first-order prediction, residual, report
+
+```bash
+pip install -e ".[torch,dev]"
+stepscope interval --from runs/global_step_100 --to runs/global_step_200 \
+    --probes probes/gpqa_dev.jsonl --out store \
+    [--observables phi_fmt phi_ans] [--method auto|jvp|backward] [--batch-size 4] \
+    [--dtype float32] [--device cuda] [--answer-prefix "\nAnswer:"] [--label-format " {label}"] [--chat-template]
+```
+
+Outputs under `store/<run_id>/`:
+
+| file | content |
+|---|---|
+| `effects/*.parquet` | one row per item × observable: `value_from`, `value_to`, `actual`, `first_order`, `method`, `domain` |
+| `behavior/*.parquet` | per checkpoint × item: `p_correct`, `argmax_in_set_correct` |
+| `consistency/*.parquet` | per observable: `n`, Pearson `corr`, `sign_agree`, residual mean / RMS, actual RMS |
+| `interval.json` | inputs, hashes, steps, render config, option token ids, `‖Δθ‖` per layer group, timings |
+| `report.html` | capability change by domain, prediction-calibration scatter, items by \|actual\| |
+
+Probe file (JSON lines): `{"id": ..., "domain": ..., "question": ..., "options": [...], "answer_idx": k}`.
+Observables: `phi_fmt = log Σ_options p(label)` (answers in the required form) and
+`phi_ans = log p(correct) − log Σ_wrong p(label)` (correct vs wrong inside the option set), both at the
+answer slot after `--answer-prefix`. Labels are resolved on the full rendered prompt item by item and
+must be a single clean token there; the resulting encoding is shared by both checkpoints and both
+first-order algorithms.
+
+First-order prediction uses forward-mode AD (`torch.func.jvp`) along Δθ with answer-slot-only logits;
+`--method backward` is the reverse-mode cross-check. Between checkpoints Δθ is the net effect of many
+optimizer steps, so this is a first-order approximation of a multi-step net update: trajectories and a
+coarse consistency check, never a per-source decomposition. Low correlation on real intervals is a
+result, not a failure.
+
+Validation (tiny random Llama, offline, CPU; `pytest`): after one real SGD (lr 1e-2) or AdamW (lr 1e-4)
+step the first-order error is a few percent of the largest actual change, JVP and backward agree to
+1e-9, and the error falls roughly quadratically when the same Δθ is scaled by 1/2 and 1/4.
 
 ## Layout
 
@@ -23,39 +59,31 @@ stepscope/
   core/        data model, parquet store + manifest, provenance, registry
   adapters/    models (HF; optional nnsight), objectives, optimizers, frameworks (verl, TRL)
   capture/     update-package capture: dattri-llm callbacks + CaptureHooks (optimizer-step boundaries)
-  observe/     probe sets, differentiable observables, behavioural metrics
-  analyze/     behavior/, dynamics/, representation/, consistency/, interventions/
+  observe/     probe files, rendering, answer-slot encoding, differentiable observables
+  analyze/     behavior/, dynamics/ (interval: actual + first-order), representation/, consistency/, interventions/
+  pipelines/   interval.py (chain one)
   studies/     phenomenon templates (ood_spillover first)
-  report/      static HTML report
-  cli/         stepscope ingest | capture | observe | analyze | report | compare
-tests/         synthetic small-model tests; no GPU
-examples/      public checkpoint sequences
+  report/      static HTML report (no external assets)
+  cli/         stepscope interval | report | ingest | capture | observe | analyze | compare
+tests/         synthetic tiny model + char tokenizer; no GPU, no downloads
 ```
 
 ## Two kinds of input
 
-- **IntervalRecord** — two checkpoints plus the source log of that interval. Enough
-  for trajectories, actual change and an interval first-order approximation.
-  Default entry point: works with checkpoints alone.
-- **UpdatePackage** — one real optimizer step: pre-update model and optimizer
-  state, a reference to the post-update parameters (or the measured Δθ), every
-  micro-batch consumed by that step, and the effective training config.
-  Required for per-source decomposition and single-step calibration.
-
-Consecutive checkpoints are usually many optimizer steps apart (verl runs
-`ppo_epochs × mini-batches` steps per global step), so a checkpoint difference is
-never treated as a single-step decomposition input.
+- **IntervalRecord** — two checkpoints plus the source log of that interval (chain one).
+- **UpdatePackage** — one real optimizer step: pre-update model and optimizer state, a reference to the
+  post-update parameters (or the measured Δθ), every micro-batch consumed by that step, and the
+  effective training config. Required for per-source decomposition and single-step calibration
+  (not implemented yet).
 
 ## Tables
 
-`effects`, `contributions`, `channels`, `behavior`, `representation`,
-`consistency`, `interventions` — see `stepscope/core/schema.py`. `contributions`
-holds only decompositions whose parts sum to the first-order prediction;
-`interventions` holds counterfactual estimates (SOURCE, TracIn, influence
+`effects`, `contributions`, `channels`, `behavior`, `representation`, `consistency`, `interventions`
+— see `stepscope/core/schema.py`. `contributions` holds only decompositions whose parts sum to the
+first-order prediction; `interventions` holds counterfactual estimates (SOURCE, TracIn, influence
 functions) which are never added to `effects`.
 
 ## Not reimplemented here
 
-Per-sample gradient capture and data attribution (dattri-llm, bergson), model
-internals access beyond plain hooks (nnsight), public benchmarks (lighteval),
-training (verl, TRL).
+Per-sample gradient capture and data attribution (dattri-llm, bergson), model internals access beyond
+plain hooks (nnsight), public benchmarks (lighteval), training (verl, TRL).

@@ -14,12 +14,14 @@ _PROV = [
 ]
 
 TABLES: dict[str, list[tuple[str, pa.DataType]]] = {
-    # one update or interval × one probe item (× one observable)
+    # one update or interval × one probe item × one observable
     "effects": [
         ("step_from", pa.int64()), ("step_to", pa.int64()),
         ("probe_set", pa.string()), ("probe_version", pa.string()), ("item", pa.string()),
-        ("observable", pa.string()),
+        ("domain", pa.string()), ("observable", pa.string()),
+        ("value_from", pa.float64()), ("value_to", pa.float64()),
         ("actual", pa.float64()), ("first_order", pa.float64()),
+        ("method", pa.string()),      # how first_order was computed: jvp | backward | none
     ],
     # effects row × one source (teacher/domain/sample/token) or momentum / weight_decay part.
     # Only decompositions whose parts sum to first_order.
@@ -42,7 +44,7 @@ TABLES: dict[str, list[tuple[str, pa.DataType]]] = {
     # one checkpoint × one probe item × one sample
     "behavior": [
         ("step", pa.int64()), ("probe_set", pa.string()), ("probe_version", pa.string()),
-        ("item", pa.string()), ("sample", pa.int64()),
+        ("item", pa.string()), ("domain", pa.string()), ("sample", pa.int64()),
         ("metric", pa.string()), ("score", pa.float64()), ("category", pa.string()),
         ("truncated", pa.bool_()), ("refused", pa.bool_()),
         ("wording", pa.string()), ("option_order", pa.string()),
@@ -57,8 +59,12 @@ TABLES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("step_from", pa.int64()), ("step_to", pa.int64()),
         ("probe_set", pa.string()), ("probe_version", pa.string()), ("observable", pa.string()),
         ("prediction", pa.string()),  # first_order | decomposition_sum | ch1_ch2
+        ("n", pa.int64()),
         ("corr", pa.float64()), ("sign_agree", pa.float64()),
-        ("resid_actual_minus_pred", pa.float64()), ("resid_pred_minus_sum", pa.float64()),
+        ("resid_actual_minus_pred", pa.float64()),   # mean of (actual - pred)
+        ("resid_rms", pa.float64()),                 # root mean square of (actual - pred)
+        ("actual_rms", pa.float64()),                # scale reference
+        ("resid_pred_minus_sum", pa.float64()),      # NaN unless a decomposition exists
     ],
     # one target × one training source × one method. Counterfactual; never added to effects.
     "interventions": [
