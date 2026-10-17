@@ -68,6 +68,20 @@ def random_batch(seed: int = 1, B: int = 4, T: int = 24):
     return torch.randint(3, 100, (B, T), generator=g)
 
 
+def random_train_batch(seed: int = 1, B: int = 4, T: int = 16, prompt_len: int = 5,
+                       sources=("math", "code"), source_kind: str = "domain"):
+    """Right-padded random batch with prompt / response masks, rows of unequal length, sources round-robin."""
+    from ..capture.batch import make_batch
+
+    g = torch.Generator().manual_seed(seed)
+    ids, masks = [], []
+    for i in range(B):
+        n = T - (i % 3)
+        ids.append(torch.randint(3, 100, (n,), generator=g).tolist())
+        masks.append([0] * prompt_len + [1] * (n - prompt_len))
+    return make_batch(ids, masks, [sources[i % len(sources)] for i in range(B)], pad_id=0, source_kind=source_kind)
+
+
 def one_sgd_step(model, lr: float, seed: int = 1):
     """θ_to = θ_from − lr ∇L on one random LM batch. Returns a new model."""
     m = copy.deepcopy(model)
