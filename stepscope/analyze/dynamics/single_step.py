@@ -69,10 +69,6 @@ def _grads(model, objective, batch, by_source: bool):
             p.grad = None
 
 
-def _scaled(d: dict[str, torch.Tensor], a: float) -> dict[str, torch.Tensor]:
-    return {k: a * v for k, v in d.items()}
-
-
 def _max_abs(d: dict[str, torch.Tensor]) -> float:
     return max((float(v.abs().max()) for v in d.values() if v.numel()), default=0.0)
 
@@ -108,10 +104,16 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
             total = None
             split = by_source and len(batch.source_names()) > 0
             for src, g in _grads(model, objective, batch, split):
-                tangent_d = _scaled(g, -eta)
+                for v in g.values():               # in place: one source gradient plus the running total
+                    v.mul_(-eta)
                 if split:
-                    _, contributions[src] = iv.first_order_jvp(model, tangent_d, enc, names, batch_size)
-                total = tangent_d if total is None else {k: total[k] + tangent_d[k] for k in total}
+                    _, contributions[src] = iv.first_order_jvp(model, g, enc, names, batch_size)
+                if total is None:
+                    total = g
+                else:
+                    for k, v in g.items():
+                        total[k].add_(v)
+                    del g
             readout_tangent = None
             ro = adapter.feature_sites().get("readout", "") + ".weight"
             if ro in total:                         # a tied readout is listed under the input embedding: no check
@@ -120,7 +122,9 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
                 wd = {k: -opt.lr * opt.weight_decay * p.detach().float() for k, p in model.named_parameters()}
                 if split:
                     _, contributions["weight_decay"] = iv.first_order_jvp(model, wd, enc, names, batch_size)
-                total = {k: total[k] + wd[k] for k in total}
+                for k, v in wd.items():
+                    total[k].add_(v)
+                del wd
         costs["gradients_and_sources"] = t.seconds
         err = max(float((total[k].cpu() - measured[k].float()).abs().max()) for k in total)
         scale = _max_abs(measured)
