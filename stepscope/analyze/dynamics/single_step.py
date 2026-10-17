@@ -124,8 +124,11 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
         costs["gradients_and_sources"] = t.seconds
         err = max(float((total[k].cpu() - measured[k].float()).abs().max()) for k in total)
         scale = _max_abs(measured)
-        ok = err <= recon_rtol * scale + 1e-7
-        diag["reconstruction"] = {"max_abs_err": err, "max_abs_measured": scale,
+        # the measured Δθ carries the rounding of θ_after in the parameter dtype
+        eps = max(torch.finfo(p.dtype).eps for p in model.parameters())
+        atol = 4 * eps * _max_abs(pkg.pre_params)
+        ok = err <= recon_rtol * scale + atol
+        diag["reconstruction"] = {"max_abs_err": err, "max_abs_measured": scale, "rounding_atol": atol,
                                   "rel_err": err / scale if scale else float("nan"), "passed": ok}
         tangent = total if ok else {k: v.to(dev) for k, v in measured.items()}
         diag["tangent"] = "reconstructed_sgd" if ok else "measured (reconstruction failed)"

@@ -174,6 +174,12 @@ def render(run_dir: str, out_html: str, interval: str | None = None) -> Path:
     return render_report(Store(run_dir.parent), run_dir.name, meta.get("summary", meta), out_html)
 
 
+def _sig(x, nd=3):
+    if x is None or (isinstance(x, float) and math.isnan(x)):
+        return "–"
+    return f"{x:.{nd}g}"
+
+
 def _mean(xs):
     xs = [x for x in xs if x is not None and not math.isnan(x)]
     return sum(xs) / len(xs) if xs else float("nan")
@@ -181,7 +187,7 @@ def _mean(xs):
 
 def _matrix_table(rows_by, cols, title_col: str) -> str:
     head = f"<tr><th class='l'>{html.escape(title_col)}</th>" + "".join(f"<th>{html.escape(c)}</th>" for c in cols) + "</tr>"
-    body = "".join(f"<tr><td class='l'>{html.escape(r)}</td>" + "".join(f"<td>{_fmt(_mean(rows_by[r].get(c, [])), 5)}</td>" for c in cols)
+    body = "".join(f"<tr><td class='l'>{html.escape(r)}</td>" + "".join(f"<td>{_sig(_mean(rows_by[r].get(c, [])))}</td>" for c in cols)
                    + "</tr>" for r in sorted(rows_by))
     return f"<table>{head}{body}</table>"
 
@@ -258,8 +264,8 @@ def render_step_report(store: Store, run_id: str, meta: dict, out_path: str | Pa
     top = sorted(effects, key=lambda r: -abs(r["actual"]))[:100]
     item_rows = "".join(
         f"<tr><td class='l'>{html.escape(r['item'])}</td><td class='l'>{html.escape(r['domain'])}</td><td class='l'>{html.escape(r['observable'])}</td>"
-        f"<td>{_fmt(r['value_from'])}</td><td>{_fmt(r['actual'], 6)}</td><td>{_fmt(r['first_order'], 6)}</td>"
-        f"<td>{_fmt(ch_tot.get((r['item'], r['observable'])), 6) if chans else '–'}</td></tr>" for r in top)
+        f"<td>{_fmt(r['value_from'])}</td><td>{_sig(r['actual'], 4)}</td><td>{_sig(r['first_order'], 4)}</td>"
+        f"<td>{_sig(ch_tot.get((r['item'], r['observable'])), 4) if chans else '–'}</td></tr>" for r in top)
     item_table = ("<table><tr><th class='l'>item</th><th class='l'>domain</th><th class='l'>observable</th><th>Φ before</th>"
                   "<th>actual</th><th>first order</th><th>CH1 + CH2</th></tr>" + item_rows + "</table>")
 
