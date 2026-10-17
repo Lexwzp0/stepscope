@@ -121,8 +121,9 @@ class CandidateObjective:
         return {s: terms[batch.rows_of(s)].sum() for s in batch.source_names()}
 
     def force_from_logits(self, logits: torch.Tensor, batch: TrainBatch) -> SparseForce:
-        lp = self.candidate_logp(logits.detach(), batch).detach().requires_grad_(True)
-        (grad,) = torch.autograd.grad(self.token_terms(lp, batch).sum(), lp)
+        with torch.enable_grad():
+            lp = self.candidate_logp(logits.detach(), batch).detach().requires_grad_(True)
+            (grad,) = torch.autograd.grad(self.token_terms(lp, batch).sum(), lp)
         cand = self.candidates(batch).long()
         B, T, K = cand.shape
         ids = torch.zeros(B, T, K, dtype=torch.long, device=cand.device)

@@ -59,6 +59,30 @@ def phi_all(names, answer_slot_logits: torch.Tensor, option_ids, correct_idx: to
     return phi_from_optlogp(names, option_logprobs(answer_slot_logits, option_ids), correct_idx)
 
 
+def observable_logit_grad(probs: torch.Tensor, option_ids, correct_idx: torch.Tensor, name: str) -> torch.Tensor:
+    """g_o = ∂Φ_o/∂z at the answer slot, [N, V] (temperature 1), from the answer-slot probabilities.
+
+    phi_fmt: q − p, where q is p restricted to the options and renormalised by p(valid);
+    phi_ans: e_{a*} − r, where r is p restricted to the wrong options and renormalised (the full-vocabulary p
+    cancels, so only the option set matters). ``option_ids``: shared [K] or per item [N, K]."""
+    p = probs.float()
+    idx = torch.as_tensor(option_ids, device=p.device, dtype=torch.long)
+    if idx.dim() == 1:
+        idx = idx.unsqueeze(0).expand(p.shape[0], -1)
+    p_opt = p.gather(-1, idx)                                          # [N, K]
+    key = name[4:] if name.startswith("phi_") else name
+    if key == "fmt":
+        q = p_opt / p_opt.sum(-1, keepdim=True)
+        return torch.zeros_like(p).scatter(-1, idx, q) - p
+    if key == "ans":
+        ci = correct_idx.to(p.device).long().unsqueeze(-1)
+        wrong = p_opt.scatter(-1, ci, 0.0)
+        coef = -(wrong / wrong.sum(-1, keepdim=True))
+        coef = coef.scatter(-1, ci, 1.0)
+        return torch.zeros_like(p).scatter(-1, idx, coef)
+    raise ValueError(f"unknown observable {name!r}; known: {OBSERVABLES}")
+
+
 @torch.no_grad()
 def decompose(opt_logp: torch.Tensor, correct_idx: torch.Tensor) -> dict[str, torch.Tensor]:
     """p(correct) = p(valid) · p(correct | valid), plus both observables and the in-set argmax."""

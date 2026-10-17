@@ -124,6 +124,30 @@ PROBES = [
 ]
 
 
+BATCH_ROWS = [
+    {"source": "math", "prompt": "Q: 12+7=", "response": " 19. Check: 19-7=12."},
+    {"source": "math", "prompt": "Q: 6*4=", "response": " 24, since 6+6+6+6=24."},
+    {"source": "code", "prompt": "def add(a, b):", "response": "\n    return a + b"},
+    {"source": "code", "prompt": "for i in range(3):", "response": "\n    print(i)"},
+]
+
+
+def write_batch_file(path: str | Path, rows=None) -> Path:
+    """A small training batch file (text rows, two sources) for the single-step chain."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in (rows or BATCH_ROWS)) + "\n", encoding="utf-8")
+    return path
+
+
+def save_checkpoint(model, path: str | Path) -> Path:
+    """HF checkpoint directory with the character tokenizer, loadable by HFModelAdapter.load."""
+    path = Path(path)
+    model.save_pretrained(str(path))
+    build_char_tokenizer(path)
+    return path
+
+
 def write_probe_file(path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

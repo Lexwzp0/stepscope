@@ -62,27 +62,35 @@ def observe(model, enc: EncodedProbes, names: Sequence[str], batch_size: int = 4
 
 
 def _tangents_for(model, delta: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {k: delta[k].to(v.dtype).to(v.device) for k, v in model.named_parameters()}
+    """Tangents for the parameters named in ``delta``; parameters it omits stay fixed (zero tangent)."""
+    params = dict(model.named_parameters())
+    unknown = sorted(set(delta) - set(params))
+    if unknown:
+        raise KeyError(f"tangent names not among the model parameters: {unknown[:5]}")
+    return {k: delta[k].to(params[k].dtype).to(params[k].device) for k in params if k in delta}
 
 
 def first_order_jvp(model, delta: dict[str, torch.Tensor], enc: EncodedProbes, names: Sequence[str],
                     batch_size: int = 4) -> tuple[torch.Tensor, torch.Tensor]:
     """Forward-mode AD along Δθ. Returns (phi_from, dphi), each [len(names), N]. One forward per batch,
-    answer-slot logits only."""
+    answer-slot logits only. ``delta`` may cover a subset of the parameters (e.g. the readout only); the
+    others are held fixed."""
     from torch.func import functional_call, jvp
 
-    params = {k: v.detach() for k, v in model.named_parameters()}
-    buffers = {k: v.detach() for k, v in model.named_buffers()}
     tangents = _tangents_for(model, delta)
+    params = {k: v.detach() for k, v in model.named_parameters() if k in tangents}
+    fixed = {k: v.detach() for k, v in model.named_parameters() if k not in tangents}
+    buffers = {k: v.detach() for k, v in model.named_buffers()}
     phis, dphis = [], []
     for sl, ids, mask, pos, opt_ids, correct in batches(enc, batch_size, next(model.parameters()).device):
         kw = forward_kwargs(ids, mask, pos)
 
         def f(p, _kw=kw, _opt=opt_ids, _cor=correct):
+            state = {**fixed, **p, **buffers}
             try:
-                out = functional_call(model, {**p, **buffers}, args=(), kwargs={**_kw, "logits_to_keep": 1})
+                out = functional_call(model, state, args=(), kwargs={**_kw, "logits_to_keep": 1})
             except TypeError:
-                out = functional_call(model, {**p, **buffers}, args=(), kwargs=_kw)
+                out = functional_call(model, state, args=(), kwargs=_kw)
             return phi_all(names, out.logits[:, -1, :], _opt, _cor)
 
         phi, dphi = jvp(f, (params,), (tangents,))
