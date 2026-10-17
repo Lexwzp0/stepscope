@@ -150,8 +150,8 @@ initialisation):
 | Llama / GPT-2 · SFT, MOPD · AdamW | 0.3 – 1.3 % | – | – |
 
 The channel implementation agrees with the official LDCL definitions pair by pair to 1e-7. On these random tiny
-models CH2 is 10–100× smaller than the exact non-readout first-order effect (their pre-norm residual stream has
-RMS ≈ 0.02, and the identity path leaves out the final-norm Jacobian), so CH1 + CH2 tracks the exact first order
+models CH2 is 10–100× smaller than the exact non-readout first-order effect (their residual stream entering the blocks has
+RMS ≈ 0.02–0.03, and the identity path leaves out the final-norm Jacobian), so CH1 + CH2 tracks the exact first order
 only partly: correlation 0.5–0.9 for Φ_ans; for Φ_fmt between −0.3 and 0.7, with the sign wrong on every item for
 the Llama with SFT, where the exact non-readout part dominates and has the opposite sign to CH1. Whether the
 approximation holds on trained models is what the chain measures there.
