@@ -1,4 +1,7 @@
-"""Parquet store with a per-run manifest (blueprint §七). Engine writes here; report only reads."""
+"""Parquet store with a per-run manifest (blueprint §七). Engine writes here; report only reads.
+
+The manifest lists every table part with its row count and, under ``analyses``, which analyses ran or were
+skipped (with the reason, e.g. a model capability the adapter does not declare)."""
 from __future__ import annotations
 
 import json
@@ -25,7 +28,7 @@ class Store:
         out = self.run_dir(run_id) / table / f"{part}.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(tbl, out)
-        self._update_manifest(run_id, table, part, len(rows))
+        self._edit_manifest(run_id, lambda d: d["tables"].setdefault(table, {}).__setitem__(part, {"rows": len(rows)}))
         return out
 
     def read(self, run_id: str, table: str) -> pa.Table:
@@ -35,8 +38,22 @@ class Store:
             return table_schema(table).empty_table()
         return pa.concat_tables([pq.read_table(f) for f in files])
 
-    def _update_manifest(self, run_id: str, table: str, part: str, n: int) -> None:
+    def record_analysis(self, run_id: str, name: str, version: str, status: str, reasons: list[str] | None = None,
+                        context: str | None = None) -> None:
+        """Record that analysis ``name`` ran or was skipped (``status`` = ran | skipped) for ``context``."""
+        entry = {"version": version, "status": status}
+        if reasons:
+            entry["reasons"] = list(reasons)
+        key = f"{name}@{context}" if context else name
+        self._edit_manifest(run_id, lambda d: d.setdefault("analyses", {}).__setitem__(key, entry))
+
+    def manifest(self, run_id: str) -> dict:
         mf = self.run_dir(run_id) / "manifest.json"
-        data = json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {"tables": {}}
-        data["tables"].setdefault(table, {})[part] = {"rows": n}
+        return json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {"tables": {}}
+
+    def _edit_manifest(self, run_id: str, fn) -> None:
+        mf = self.run_dir(run_id) / "manifest.json"
+        data = self.manifest(run_id)
+        data.setdefault("tables", {})
+        fn(data)
         mf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

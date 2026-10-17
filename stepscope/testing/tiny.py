@@ -45,6 +45,24 @@ def build_tiny_model(seed: int = 0):
     return m
 
 
+def build_tiny_gpt2(seed: int = 0):
+    """Random GPT-2 (a non-Llama backbone: LayerNorm with bias, Conv1D blocks, learned positions): vocab 128,
+    hidden 32, 2 layers, no dropout, untied readout so the readout channel identity is exact."""
+    from transformers import GPT2Config, GPT2LMHeadModel
+
+    cfg = GPT2Config(vocab_size=128, n_embd=32, n_layer=2, n_head=4, n_positions=512, resid_pdrop=0.0,
+                     embd_pdrop=0.0, attn_pdrop=0.0, tie_word_embeddings=False, bos_token_id=1, eos_token_id=1,
+                     pad_token_id=0, attn_implementation="eager")
+    torch.manual_seed(seed)
+    m = GPT2LMHeadModel(cfg).float().eval()
+    for p in m.parameters():
+        p.requires_grad_(False)
+    return m
+
+
+BACKBONES = {"llama": build_tiny_model, "gpt2": build_tiny_gpt2}
+
+
 def random_batch(seed: int = 1, B: int = 4, T: int = 24):
     g = torch.Generator().manual_seed(seed)
     return torch.randint(3, 100, (B, T), generator=g)
