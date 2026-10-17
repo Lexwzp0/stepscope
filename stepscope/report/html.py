@@ -144,10 +144,27 @@ No per-source attribution is implied. Low correlation or large residuals on real
     return out_path
 
 
+def find_interval_meta(run_dir: Path, interval: str | None) -> Path:
+    """``interval`` is a full tag "<from>_<to>_<probe version>" or "<from>_<to>" when only one probe version
+    exists for that interval; None picks interval.json (the latest run)."""
+    if not interval:
+        return run_dir / "interval.json"
+    exact = run_dir / f"interval_{interval}.json"
+    if exact.exists():
+        return exact
+    found = sorted(run_dir.glob(f"interval_{interval}_*.json"))
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise FileNotFoundError(exact)
+    tags = ", ".join(p.stem[len("interval_"):] for p in found)
+    raise ValueError(f"interval {interval} has several probe versions in {run_dir}; pass one of: {tags}")
+
+
 def render(run_dir: str, out_html: str, interval: str | None = None) -> Path:
-    """Re-render from a run directory. ``interval`` = "<from>_<to>" picks interval_<from>_<to>.json; default latest."""
+    """Re-render from a run directory (see ``find_interval_meta`` for ``interval``)."""
     run_dir = Path(run_dir)
-    meta_path = run_dir / (f"interval_{interval}.json" if interval else "interval.json")
+    meta_path = find_interval_meta(run_dir, interval)
     if not meta_path.exists():
         raise FileNotFoundError(meta_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))

@@ -28,19 +28,26 @@ class DeltaInfo:
     n_params: int
 
 
-def delta_params(model_from, model_to, groups: dict[str, list[str]] | None = None):
-    """Δθ = θ_to − θ_from keyed by ``named_parameters()`` names (tied weights appear once)."""
+def delta_params(model_from, model_to, groups: dict[str, list[str]] | None = None, release: bool = False):
+    """Δθ = θ_to − θ_from keyed by ``named_parameters()`` names (tied weights appear once).
+
+    ``release=True`` frees each tensor of ``model_to`` as soon as its difference is taken, so the peak is two
+    copies of the parameters (θ_from and θ_to shrinking while Δθ grows) instead of three; ``model_to`` is
+    unusable afterwards. Names and shapes are checked before anything is released."""
     pf = dict(model_from.named_parameters())
     pt = dict(model_to.named_parameters())
     if pf.keys() != pt.keys():
         missing = sorted(set(pf) ^ set(pt))
         raise ValueError(f"parameter names differ between checkpoints: {missing[:5]}{'...' if len(missing) > 5 else ''}")
+    for k, a in pf.items():
+        if a.shape != pt[k].shape:
+            raise ValueError(f"shape mismatch for {k}: {tuple(a.shape)} vs {tuple(pt[k].shape)}")
     delta = {}
     for k, a in pf.items():
         b = pt[k]
-        if a.shape != b.shape:
-            raise ValueError(f"shape mismatch for {k}: {tuple(a.shape)} vs {tuple(b.shape)}")
         delta[k] = (b.detach().float() - a.detach().float()).to(a.device)
+        if release:
+            b.data = torch.empty(0, dtype=b.dtype, device=b.device)
     sq = {k: float(v.pow(2).sum()) for k, v in delta.items()}
     gnorms = {}
     if groups:

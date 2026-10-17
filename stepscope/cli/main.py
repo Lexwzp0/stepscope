@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("observe", help="run probe sets on every checkpoint"); s.add_argument("run"); s.add_argument("--probes", nargs="+", required=True)
     s = sub.add_parser("analyze", help="run a study or named analyses"); s.add_argument("run"); s.add_argument("--study"); s.add_argument("--analyses", nargs="*")
     s = sub.add_parser("report", help="re-render the static HTML report of a run directory")
-    s.add_argument("run_dir"); s.add_argument("--out"); s.add_argument("--interval", help="<from>_<to>; default: latest")
+    s.add_argument("run_dir"); s.add_argument("--out"); s.add_argument("--interval", help="<from>_<to>_<probe version>, or <from>_<to> when that interval has one probe version; default: latest")
     s = sub.add_parser("compare", help="compare runs on the same probes and criteria"); s.add_argument("runs", nargs="+")
 
     s = sub.add_parser("probes", help="probe file utilities")

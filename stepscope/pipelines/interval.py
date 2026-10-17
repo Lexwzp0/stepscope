@@ -3,8 +3,9 @@ interval.json and report.html (blueprint §十四).
 
 Run identity: the default run_id names the training run and both global steps (derived from
 ``.../<run>/global_step_<N>/actor/huggingface``), so verl exports never collide on ``huggingface``.
-Several intervals may share one run_id; every table part, ``interval_<a>_<b>.json`` and
-``report_<a>_<b>.html`` are per interval, and the report only shows its own interval and probe version.
+Several intervals and probe sets may share one run_id: every table part, ``interval_<tag>.json`` and
+``report_<tag>.html`` are named by ``shard_tag`` = ``<from>_<to>_<probe version>``, and the report only shows
+its own interval and probe version.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ from ..observe.probes import RenderConfig, load_probe_file, select_items
 from ..observe.scoring import encode_probes
 from ..report.html import render_report
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 _STEP_DIR = re.compile(r"^global_step_(\d+)$")
 _STEP = re.compile(r"(?:global_step|step)[_\-]?(\d+)", re.I)
 
@@ -51,6 +52,11 @@ class IntervalArgs:
     render: RenderConfig = field(default_factory=RenderConfig)
     report: str | None = None
     max_items: int | None = None
+
+
+def shard_tag(step_from: int, step_to: int, probe_version: str) -> str:
+    """Name of every per-interval artefact: table parts, interval_<tag>.json, report_<tag>.html."""
+    return f"{step_from}_{step_to}_{probe_version}"
 
 
 def describe_checkpoint(path: str, default_step: int | None = None) -> tuple[str, int | None]:
@@ -114,9 +120,9 @@ def run_interval(a: IntervalArgs) -> dict:
     names = tuple(a.observables)
     store = Store(a.out)
     run_dir = store.run_dir(run_id)
-    tag = f"{step_from}_{step_to}"
 
     probes = select_items(load_probe_file(a.probes), a.max_items)
+    tag = shard_tag(step_from, step_to, probes.version)
     ad_from = HFModelAdapter.load(a.ckpt_from, a.dtype, a.device)
     enc = encode_probes(ad_from.tokenizer, probes.items, a.render)
 
@@ -129,7 +135,7 @@ def run_interval(a: IntervalArgs) -> dict:
         raise ValueError("the two checkpoints tokenize the probes differently; both ends must share one encoding")
     with iv.Timer() as t_obs_to:
         s_to = iv.observe(ad_to.model, enc, names, a.batch_size)
-    delta, dinfo = iv.delta_params(ad_from.model, ad_to.model, ad_from.param_groups())
+    delta, dinfo = iv.delta_params(ad_from.model, ad_to.model, ad_from.param_groups(), release=True)
     ad_to.free(); del ad_to; gc.collect()
 
     with iv.Timer() as t_fo:
@@ -154,7 +160,7 @@ def run_interval(a: IntervalArgs) -> dict:
     store.write(run_id, "consistency", con_rows, part=tag)
 
     summary = {
-        "run_id": run_id, "step_from": step_from, "step_to": step_to,
+        "run_id": run_id, "step_from": step_from, "step_to": step_to, "tag": tag,
         "ckpt_from": a.ckpt_from, "ckpt_to": a.ckpt_to,
         "probe_set": probes.name, "probe_version": probes.version, "n_items": len(enc),
         "observables": list(names), "method": method_used, "batch_size": a.batch_size, "dtype": a.dtype,
