@@ -148,10 +148,39 @@ def save_checkpoint(model, path: str | Path) -> Path:
     return path
 
 
-def write_probe_file(path: str | Path) -> Path:
+def synthetic_probes(n: int, seed: int = 0) -> list[dict]:
+    """``n`` deterministic 4-option items in three domains (arithmetic, comparison, alphabet) for larger demo probe
+    sets; option order shuffled, answer index tracked."""
+    import random
+
+    rng = random.Random(seed)
+    out = []
+    for i in range(n):
+        dom = ("arith", "compare", "alphabet")[i % 3]
+        if dom == "arith":
+            a, b = rng.randint(1, 30), rng.randint(1, 30)
+            q, ans = f"What is {a}+{b}?", str(a + b)
+            wrong = rng.sample([str(a + b + d) for d in (-3, -2, -1, 1, 2, 3)], 3)
+        elif dom == "compare":
+            a, b = rng.sample(range(1, 100), 2)
+            q, ans = f"Which is larger, {a} or {b}?", str(max(a, b))
+            wrong = [str(min(a, b)), str(a + b), str(abs(a - b))]
+        else:
+            k = rng.randint(0, 24)
+            q, ans = f"Which letter comes after {chr(65 + k)}?", chr(66 + k)
+            wrong = rng.sample([chr(65 + j) for j in range(26) if j != k + 1], 3)
+        opts = [ans] + wrong
+        rng.shuffle(opts)
+        out.append({"id": f"syn{i}", "domain": dom, "question": q, "options": opts, "answer_idx": opts.index(ans)})
+    return out
+
+
+def write_probe_file(path: str | Path, extra: int = 0) -> Path:
+    """The 8 hand-written items, plus ``extra`` synthetic ones."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(p) for p in PROBES) + "\n", encoding="utf-8")
+    rows = PROBES + synthetic_probes(extra)
+    path.write_text("\n".join(json.dumps(p) for p in rows) + "\n", encoding="utf-8")
     return path
 
 

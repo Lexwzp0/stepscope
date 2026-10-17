@@ -28,4 +28,6 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
         run: pytest -q
       - name: Offline demo
-        run: python examples/tiny_demo.py --out /tmp/stepscope-demo
+        run: |
+          python examples/tiny_demo.py --out /tmp/stepscope-demo
+          python examples/tiny_step_demo.py --out /tmp/stepscope-step-demo --objective mopd
