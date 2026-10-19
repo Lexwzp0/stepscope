@@ -12,6 +12,11 @@ and PyTorch 2.8.0 (CUDA 12.8); the adapter module layout is also checked with
 Transformers 5.20.1. On an RTX PRO 6000, the PyTorch installation must also
 support that GPU.
 
+To match the reported Transformers environment, install `transformers==4.57.1`.
+The measured peak allocated memory was 72.8 GiB for SGD and 57.3 GiB for AdamW;
+SGD peak reserved memory was 76.7 GiB. These measurements used the short sequences
+and batch settings below on a 96 GB GPU, and do not cover longer sequences or larger batches.
+
 Prepare inputs while the GPU is stopped, or on another machine with a persistent
 disk. These commands download about 27 GB of model weights plus a 0.94 GB prompt
 file. Hugging Face's cache holds one copy; repeated preparation reuses it.
@@ -76,8 +81,9 @@ python examples/run_real_case.py --optimizer adamw --run-id adamw_80 --max-items
   --scored-batch runs/real_case/results/smoke_sgd/package_0/batch.pt
 ```
 
-AdamW defaults to learning rate `1.5e-6` and weight decay `0.01`. Its first-order
-prediction uses the measured update; source and LDCL channel decompositions are
+AdamW defaults to learning rate `1.5e-6` and weight decay `0.01`. Each run starts
+with a new optimizer and empty moment state; it does not restore moments from an
+ongoing training run. Its first-order prediction uses the measured update; source and LDCL channel decompositions are
 not available for AdamW. Each run writes its own report, summary, and update
 package below `runs/real_case/results/`. `--no-package` avoids another large
 update package for additional exploratory smokes.

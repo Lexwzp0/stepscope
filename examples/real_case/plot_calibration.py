@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 RUNS = [("sgd_80", "SGD, lr 1e-2"), ("sgd_lr1e3_80", "SGD, lr 1e-3"),
-        ("adamw_80", "AdamW, lr 1.5e-6 (training lr)"), ("adamw_lr1p5e7_80", "AdamW, lr 1.5e-7")]
+        ("adamw_80", "AdamW, lr 1.5e-6"), ("adamw_lr1p5e7_80", "AdamW, lr 1.5e-7")]
 OBS = [("phi_fmt", "Φ_fmt", "o"), ("phi_ans", "Φ_ans", "s")]
 THEMES = {
     "light": dict(surface="#fcfcfb", ink="#0b0b0b", ink2="#52514e", muted="#898781", grid="#e1e0d9",

@@ -5,20 +5,20 @@
 [![tests](https://github.com/Lexwzp0/stepscope/actions/workflows/tests.yml/badge.svg)](https://github.com/Lexwzp0/stepscope/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-StepScope treats **one real parameter update** as the basic object of study. For any backbone,
-any post-training objective (SFT, GRPO, DPO, on-policy distillation, ...) and any optimizer it
-measures what the update actually did to a set of behaviours, predicts that change to first order
-along the measured update, and reports how well the prediction holds:
+StepScope treats **one real parameter update** as the basic object of study. On supported Hugging Face
+causal language models, it measures changes in differentiable observables and checks a first-order
+prediction against the actual change. Checkpoint-pair analysis uses the net parameter difference;
+the single-step path currently implements SFT and Open-MOPD losses with SGD and AdamW:
 
 ```
 ΔΦ  = Φ(θ + Δθ) − Φ(θ)        actual change of a differentiable observable
 ΔΦ̂ = ∇Φ(θ) · Δθ               first-order prediction along the real update
 ```
 
-Everything else — per-source decomposition of an AdamW step, the LDCL token-interaction
-channels, behaviour trajectories, representation metrics, counterfactual data-intervention
-estimates — is an analysis plugin writing to fixed tables, with a consistency table that
-checks every prediction against the real update.
+SGD per-source decomposition and approximate LDCL token-interaction channels write to fixed result
+tables, with explicit checks against exact first order and actual change. AdamW per-source decomposition,
+trajectory studies, representation metrics and data-intervention estimates are planned extensions;
+see *Roadmap*.
 
 > Status: **early research release**. Two chains are implemented and tested offline: *two checkpoints →
 > per-item actual change, first-order prediction, residual, report*, and *one real optimizer step → LDCL
@@ -37,16 +37,19 @@ One Open-MOPD update of [Open-MOPD-SmolLM3-3B-MixSFT](https://huggingface.co/Byt
   <img alt="First-order prediction vs actual change for SGD and AdamW at two step sizes" src="docs/img/real_case_calibration_light.png" width="640">
 </picture>
 
-- At a 10× smaller step the first-order prediction is within **2.2 %** of the actual change for both
-  optimizers (max error / max change); the error shrinks with the step, as the second-order term should.
-- At the AdamW learning rate of the training recipe, a single step already leaves 26–27 % max error
-  (correlation 0.96): how far a first-order prediction can be trusted is itself a measurement.
+- At a 10× smaller step, **max absolute error / max absolute actual change is at most 2.2 %** for
+  each observable and optimizer. Both maxima are taken over all 80 rows; this is not a per-item relative
+  error bound. The reduction is consistent with a second-order remainder.
+- At AdamW lr `1.5e-6`, the first step with newly initialized optimizer moments has 25.7–26.9 % max error
+  by that measure (correlation 0.96). This result does not establish the error of later training steps.
 - The LDCL channels CH1 + CH2 do **not** track the exact first order on this model. Details, tables and
   the open question are in [*Validation*](#validation); reproduction in [`examples/real_case/`](examples/real_case/).
 
 ## Quick start (offline, CPU, under a minute)
 
 ```bash
+git clone https://github.com/Lexwzp0/stepscope.git
+cd stepscope
 pip install torch --index-url https://download.pytorch.org/whl/cpu   # or your own torch
 pip install -e ".[torch]"
 python examples/tiny_demo.py --out demo_out
@@ -57,11 +60,12 @@ This builds a random tiny Llama, takes one real SGD step, saves both as HF check
 the prediction-calibration scatter (actual vs first-order), section 1 the change by domain.
 
 ```bash
-python examples/tiny_step_demo.py --out step_demo [--arch llama|gpt2] [--objective sft|mopd] [--optimizer sgd|adamw]
+python examples/tiny_step_demo.py --out step_demo --arch llama --objective mopd --optimizer sgd
 ```
 
 runs the single-step chain below on a tiny model, a 4-row batch from two sources and 64 probe items;
-the report is `step_demo/store/<run_id>/report_step.html`.
+the report is `step_demo/store/<run_id>/report_step.html`. Other supported demo options are
+`--arch gpt2`, `--objective sft` and `--optimizer adamw`.
 
 ## Chain one on your own checkpoints
 
@@ -114,7 +118,7 @@ many optimizer steps, so this is a first-order approximation of a multi-step net
 a coarse consistency check, never a per-source decomposition. Low correlation on real intervals is a
 result, not a failure.
 
-## Single-step chain: one real update, three predictions that must agree
+## Single-step chain: one real update, two approximation checks
 
 ```bash
 stepscope step --checkpoint ckpt/ --batch batch.jsonl --probes probes.jsonl --out store \
@@ -135,9 +139,11 @@ state before the step, the batch, the effective configuration). Then, on the sam
 | 1 | CH1 + CH2: LDCL token-interaction channels per source and residual-branch site (SGD only) | exact first order |
 | 2 | exact first order: JVP at θ along the batch's own update (SGD: rebuilt from the batch and checked against the measured Δθ; AdamW: the measured Δθ) | actual change Φ(θ + Δθ) − Φ(θ) |
 
-Under SGD the first order also splits exactly by source (`contributions`, `target = first_order`), and two
-diagnostics are recorded: the readout channel CH1 must equal the JVP along the readout part of the update, and
-CH2 is compared with the exact first-order effect of everything except the readout. Outputs: `effects`,
+Under SGD the first order also splits exactly by source (`contributions`, `target = first_order`).
+For an untied, bias-free readout, CH1 is checked against the readout part of the loss-gradient update;
+CH2 is compared with the remaining loss-gradient first-order effect. Weight decay is excluded from these
+channel references. The two independent readout/backbone checks are skipped for tied embeddings, with the
+reason recorded. Channel agreement is measured, not assumed. Outputs: `effects`,
 `channels`, `contributions`, `behavior`, `consistency`, `step_<tag>.json`, `report_step_<tag>.html`.
 
 Model access goes through declared adapter capabilities (`readout`, `residual_inputs`); the loss, its split
@@ -180,21 +186,28 @@ Setup ([`examples/real_case/`](examples/real_case/)): pinned public MixSFT check
 six student responses (two per math / code / IF source, prompts ≤ 512 tokens, responses ≤ 128 tokens,
 no-thinking mode), scored once by the teachers (top-4) and reused by every run; 80 MMLU-Redux dev rows
 (5 questions from each of 4 subjects, 4 answer rotations each, so 20 independent questions); FP32, TF32
-off, gradient clipping at 1.0, one RTX PRO 6000. This is a controlled single-step case, not a
-reproduction of Open-MOPD training and not a benchmark.
+off, gradient clipping at 1.0, one RTX PRO 6000 per run. Each run starts from the same checkpoint and a new
+optimizer; AdamW starts with empty moment state, betas `(0.9, 0.999)` and eps `1e-8`. The experimental code
+baseline is [`76d027e`](https://github.com/Lexwzp0/stepscope/commit/76d027e68fe376c3612f6c14b47799f15815c59b).
+This is a controlled single-step case, not a reproduction of Open-MOPD training and not a benchmark.
+
+Paired values below are Φ_fmt / Φ_ans. Max error / max change is
+`max(abs(first_order - actual)) / max(abs(actual))`; relative RMS error is
+`RMS(first_order - actual) / RMS(actual)`, each computed over the 80 rows for one observable.
 
 | optimizer, lr (weight decay) | first order vs actual: corr (Φ_fmt, Φ_ans) | max error / max change | relative RMS error | time | peak allocated |
 |---|---:|---:|---:|---:|---:|
 | SGD, 1e-2 (0) | 0.979, 0.992 | 25.6 %, 18.5 % | 21.2 %, 12.9 % | 379 s | 72.8 GiB |
 | SGD, 1e-3 (0) | 0.99990, 0.99993 | **2.2 %, 1.5 %** | 2.4 %, 1.3 % | 362 s | 72.8 GiB |
-| AdamW, 1.5e-6 (0.01), recipe lr | 0.963, 0.962 | 26.9 %, 25.7 % | 22.4 %, 27.1 % | 213 s | 57.3 GiB |
+| AdamW, 1.5e-6 (0.01) | 0.963, 0.962 | 26.9 %, 25.7 % | 22.4 %, 27.1 % | 213 s | 57.3 GiB |
 | AdamW, 1.5e-7 (0.01) | 0.99978, 0.99964 | **2.2 %, 1.7 %** | 2.3 %, 2.8 % | 157 s¹ | 57.3 GiB |
 
 ¹ Without writing an update package. Times exclude response generation (≈ 65 s) and teacher scoring (≈ 150 s).
 The SGD update rebuilt from the batch matches the measured Δθ within rounding, and the per-source parts
 (math, code, IF) sum to the exact first order within 7e-7 (max absolute difference).
 
-Change by domain for the recipe-lr AdamW step (mean over the 20 rows of each subject):
+Change by domain for the AdamW lr `1.5e-6` step (mean over 5 questions × 4 rotations in each subject).
+These are changes in the two observables, not changes in accuracy:
 
 | subject | Φ_fmt actual | Φ_fmt first order | Φ_ans actual | Φ_ans first order |
 |---|---:|---:|---:|---:|
