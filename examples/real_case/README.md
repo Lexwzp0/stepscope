@@ -1,4 +1,6 @@
-# Real 3B calibration inputs
+# Reproduce the real 3B case
+
+[Overview](../../README.md) · [Results and limitations](../../docs/validation.md)
 
 This prepares a small public Open-MOPD case: MixSFT, its three domain teachers,
 six student responses, and 80 MMLU-Redux probe rows. It does not train the full
@@ -7,7 +9,7 @@ which is ignored by Git.
 
 Use a Python environment with `pip install -e '.[torch]' huggingface-hub`.
 The model architecture is `SmolLM3ForCausalLM`; use a Transformers version that
-provides it. The results in the main README were produced with Transformers 4.57.1
+provides it. The reported results were produced with Transformers 4.57.1
 and PyTorch 2.8.0 (CUDA 12.8); the adapter module layout is also checked with
 Transformers 5.20.1. On an RTX PRO 6000, the PyTorch installation must also
 support that GPU.

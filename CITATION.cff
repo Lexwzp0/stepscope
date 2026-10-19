@@ -10,8 +10,8 @@ date-released: 2026-10-17
 license: MIT
 repository-code: "https://github.com/Lexwzp0/stepscope"
 abstract: >-
-  StepScope treats one real parameter update as the basic object of study: for any backbone,
-  post-training objective and optimizer it measures the actual change of differentiable
-  observables between checkpoints, predicts it to first order along the measured update, and
-  reports the calibration of that prediction. Per-source decomposition, LDCL interaction
-  channels, behaviour and representation analyses are plugins on fixed tables.
+  StepScope compares first-order predictions with actual changes in differentiable
+  observables on supported Hugging Face causal language models. It analyzes checkpoint
+  pairs or controlled single optimizer steps with SFT and Open-MOPD losses using SGD
+  or AdamW, and produces calibration reports and result tables. SGD steps additionally
+  support source decomposition and experimental LDCL channel diagnostics.

@@ -6,7 +6,7 @@ Offline, CPU, no downloads:
   first-order prediction, consistency, report.
 - `tiny_step_demo.py` — single-step chain: a tiny random model (`--arch llama|gpt2`), a 4-row batch from two
   sources, 64 probe items, one SGD or AdamW step with the SFT or MOPD objective → update package, CH1 + CH2 →
-  exact first order → actual change, report.
+  exact first order → actual change, report. Channel and source analyses are SGD-only.
 
 Real, trained checkpoint inputs:
 
@@ -14,6 +14,4 @@ Real, trained checkpoint inputs:
   six generated sequences, and 20 independent MMLU-Redux questions with four answer-position rotations.
   `prepare_real_case.py` prepares the inputs; `run_real_case.py` executes one SGD or AdamW calibration.
 
-Other candidate checkpoint sequences:
-
-- Tülu 3.1 8B, DPO start → GRPO checkpoints (the lineage used by rlvr-safety-dynamics).
+[Usage guide](../docs/usage.md) · [Validation results](../docs/validation.md)
