@@ -195,14 +195,15 @@ Paired values below are Φ_fmt / Φ_ans. Max error / max change is
 `max(abs(first_order - actual)) / max(abs(actual))`; relative RMS error is
 `RMS(first_order - actual) / RMS(actual)`, each computed over the 80 rows for one observable.
 
-| optimizer, lr (weight decay) | first order vs actual: corr (Φ_fmt, Φ_ans) | max error / max change | relative RMS error | time | peak allocated |
-|---|---:|---:|---:|---:|---:|
-| SGD, 1e-2 (0) | 0.979, 0.992 | 25.6 %, 18.5 % | 21.2 %, 12.9 % | 379 s | 72.8 GiB |
-| SGD, 1e-3 (0) | 0.99990, 0.99993 | **2.2 %, 1.5 %** | 2.4 %, 1.3 % | 362 s | 72.8 GiB |
-| AdamW, 1.5e-6 (0.01) | 0.963, 0.962 | 26.9 %, 25.7 % | 22.4 %, 27.1 % | 213 s | 57.3 GiB |
-| AdamW, 1.5e-7 (0.01) | 0.99978, 0.99964 | **2.2 %, 1.7 %** | 2.3 %, 2.8 % | 157 s¹ | 57.3 GiB |
+| optimizer, lr (weight decay) | first order vs actual: corr (Φ_fmt, Φ_ans) | max error / max change | relative RMS error | peak allocated |
+|---|---:|---:|---:|---:|
+| SGD, 1e-2 (0) | 0.979, 0.992 | 25.6 %, 18.5 % | 21.2 %, 12.9 % | 72.8 GiB |
+| SGD, 1e-3 (0) | 0.99990, 0.99993 | **2.2 %, 1.5 %** | 2.4 %, 1.3 % | 72.8 GiB |
+| AdamW, 1.5e-6 (0.01) | 0.963, 0.962 | 26.9 %, 25.7 % | 22.4 %, 27.1 % | 57.3 GiB |
+| AdamW, 1.5e-7 (0.01) | 0.99978, 0.99964 | **2.2 %, 1.7 %** | 2.3 %, 2.8 % | 57.3 GiB |
 
-¹ Without writing an update package. Times exclude response generation (≈ 65 s) and teacher scoring (≈ 150 s).
+Runs shared GPUs with other workloads, so elapsed times are not reported as performance measurements.
+Peak allocated memory is per process for this configuration. The smaller AdamW run omitted the update package.
 The SGD update rebuilt from the batch matches the measured Δθ within rounding, and the per-source parts
 (math, code, IF) sum to the exact first order within 7e-7 (max absolute difference).
 
