@@ -6,10 +6,11 @@ Open-MOPD recipe. Everything downloaded or generated goes into `runs/real_case/`
 which is ignored by Git.
 
 Use a Python environment with `pip install -e '.[torch]' huggingface-hub`.
-The model architecture is `SmolLM3ForCausalLM`; use a recent Transformers version
-that provides it. Its adapter module layout was checked with Transformers 5.20.1.
-For this example, install `transformers==5.20.1` to use the same checked version.
-On an RTX PRO 6000, the PyTorch installation must also support that GPU.
+The model architecture is `SmolLM3ForCausalLM`; use a Transformers version that
+provides it. The results in the main README were produced with Transformers 4.57.1
+and PyTorch 2.8.0 (CUDA 12.8); the adapter module layout is also checked with
+Transformers 5.20.1. On an RTX PRO 6000, the PyTorch installation must also
+support that GPU.
 
 Prepare inputs while the GPU is stopped, or on another machine with a persistent
 disk. These commands download about 27 GB of model weights plus a 0.94 GB prompt
@@ -80,6 +81,17 @@ prediction uses the measured update; source and LDCL channel decompositions are
 not available for AdamW. Each run writes its own report, summary, and update
 package below `runs/real_case/results/`. `--no-package` avoids another large
 update package for additional exploratory smokes.
+
+The README figure adds the same two runs at a 10× smaller step, reusing the same
+scored batch, and is drawn from the four result directories:
+
+```bash
+python examples/run_real_case.py --optimizer sgd --lr 1e-3 --run-id sgd_lr1e3_80 --max-items 80 \
+  --scored-batch runs/real_case/results/smoke_sgd/package_0/batch.pt
+python examples/run_real_case.py --optimizer adamw --lr 1.5e-7 --run-id adamw_lr1p5e7_80 --max-items 80 \
+  --scored-batch runs/real_case/results/smoke_sgd/package_0/batch.pt --no-package
+python examples/real_case/plot_calibration.py runs/real_case/results --out docs/img   # needs matplotlib, pandas
+```
 
 The student uses tied input/output embeddings. The adapter supports its module
 layout, but the independent readout-channel exactness check is skipped for tied

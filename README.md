@@ -20,11 +20,29 @@ channels, behaviour trajectories, representation metrics, counterfactual data-in
 estimates — is an analysis plugin writing to fixed tables, with a consistency table that
 checks every prediction against the real update.
 
-> Status: **early research release**. Two chains are implemented, numerically validated and tested
-> offline: *two checkpoints → per-item actual change, first-order prediction, residual, report*, and
-> *one real optimizer step → LDCL channels → exact first order → actual change*, on two backbone
-> families (Llama-like, GPT-2) and two objectives (SFT, Open-MOPD). The rest of the design is interfaces
-> and stubs; see *Roadmap*.
+> Status: **early research release**. Two chains are implemented and tested offline: *two checkpoints →
+> per-item actual change, first-order prediction, residual, report*, and *one real optimizer step → LDCL
+> channels → exact first order → actual change*, on two tiny backbone families (Llama-like, GPT-2) and two
+> objectives (SFT, Open-MOPD). The single-step chain has also been run on a real 3B model (below). The rest
+> of the design is interfaces and stubs; see *Roadmap*.
+
+## On a real model
+
+One Open-MOPD update of [Open-MOPD-SmolLM3-3B-MixSFT](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT)
+(six student responses scored by the math / code / IF teachers), measured on 80 MMLU-Redux probe rows
+(20 questions × 4 answer rotations), FP32:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/real_case_calibration_dark.png">
+  <img alt="First-order prediction vs actual change for SGD and AdamW at two step sizes" src="docs/img/real_case_calibration_light.png" width="640">
+</picture>
+
+- At a 10× smaller step the first-order prediction is within **2.2 %** of the actual change for both
+  optimizers (max error / max change); the error shrinks with the step, as the second-order term should.
+- At the AdamW learning rate of the training recipe, a single step already leaves 26–27 % max error
+  (correlation 0.96): how far a first-order prediction can be trusted is itself a measurement.
+- The LDCL channels CH1 + CH2 do **not** track the exact first order on this model. Details, tables and
+  the open question are in [*Validation*](#validation); reproduction in [`examples/real_case/`](examples/real_case/).
 
 ## Quick start (offline, CPU, under a minute)
 
@@ -155,6 +173,43 @@ RMS ≈ 0.02–0.03, and the identity path leaves out the final-norm Jacobian), 
 only partly: correlation 0.5–0.9 for Φ_ans; for Φ_fmt between −0.3 and 0.7, with the sign wrong on every item for
 the Llama with SFT, where the exact non-readout part dominates and has the opposite sign to CH1. Whether the
 approximation holds on trained models is what the chain measures there.
+
+### Real model: one Open-MOPD step on SmolLM3-3B
+
+Setup ([`examples/real_case/`](examples/real_case/)): pinned public MixSFT checkpoint and its three teachers;
+six student responses (two per math / code / IF source, prompts ≤ 512 tokens, responses ≤ 128 tokens,
+no-thinking mode), scored once by the teachers (top-4) and reused by every run; 80 MMLU-Redux dev rows
+(5 questions from each of 4 subjects, 4 answer rotations each, so 20 independent questions); FP32, TF32
+off, gradient clipping at 1.0, one RTX PRO 6000. This is a controlled single-step case, not a
+reproduction of Open-MOPD training and not a benchmark.
+
+| optimizer, lr (weight decay) | first order vs actual: corr (Φ_fmt, Φ_ans) | max error / max change | relative RMS error | time | peak allocated |
+|---|---:|---:|---:|---:|---:|
+| SGD, 1e-2 (0) | 0.979, 0.992 | 25.6 %, 18.5 % | 21.2 %, 12.9 % | 379 s | 72.8 GiB |
+| SGD, 1e-3 (0) | 0.99990, 0.99993 | **2.2 %, 1.5 %** | 2.4 %, 1.3 % | 362 s | 72.8 GiB |
+| AdamW, 1.5e-6 (0.01), recipe lr | 0.963, 0.962 | 26.9 %, 25.7 % | 22.4 %, 27.1 % | 213 s | 57.3 GiB |
+| AdamW, 1.5e-7 (0.01) | 0.99978, 0.99964 | **2.2 %, 1.7 %** | 2.3 %, 2.8 % | 157 s¹ | 57.3 GiB |
+
+¹ Without writing an update package. Times exclude response generation (≈ 65 s) and teacher scoring (≈ 150 s).
+The SGD update rebuilt from the batch matches the measured Δθ within rounding, and the per-source parts
+(math, code, IF) sum to the exact first order within 7e-7 (max absolute difference).
+
+Change by domain for the recipe-lr AdamW step (mean over the 20 rows of each subject):
+
+| subject | Φ_fmt actual | Φ_fmt first order | Φ_ans actual | Φ_ans first order |
+|---|---:|---:|---:|---:|
+| abstract algebra | −0.036 | −0.035 | −0.010 | −0.013 |
+| college computer science | −0.078 | −0.073 | +0.008 | +0.014 |
+| high-school physics | −0.087 | −0.078 | −0.026 | −0.022 |
+| philosophy | −0.032 | −0.014 | +0.052 | +0.046 |
+
+**CH1 + CH2 on this model.** Against the exact first order of the SGD step the channel sum has correlation
+−0.72 (Φ_fmt) and −0.40 (Φ_ans), sign agreement 22.5 % and 35 %, and relative RMS error above 100 %. These
+numbers stay the same at the 10× smaller step, so the mismatch is not a step-size effect. SmolLM3 ties its
+input and output embeddings: the shared matrix's update also acts through the input path, which CH1 does
+not include, and the independent readout-channel check is skipped for tied weights. Which part of the gap
+comes from the tied path and which from the CH2 approximation is not isolated yet. AdamW has no source or
+channel decomposition yet.
 
 ## Design
 
