@@ -8,7 +8,12 @@ Offline, CPU, no downloads:
   sources, 64 probe items, one SGD or AdamW step with the SFT or MOPD objective → update package, CH1 + CH2 →
   exact first order → actual change, report.
 
-Public checkpoint sequences for end-to-end runs. Candidates (not yet wired):
+Real, trained checkpoint inputs:
+
+- [Open-MOPD 3B calibration](real_case/README.md): pinned MixSFT and three domain teachers,
+  six generated sequences, and 20 independent MMLU-Redux questions with four answer-position rotations.
+  `prepare_real_case.py` prepares the inputs; `run_real_case.py` executes one SGD or AdamW calibration.
+
+Other candidate checkpoint sequences:
 
 - Tülu 3.1 8B, DPO start → GRPO checkpoints (the lineage used by rlvr-safety-dynamics).
-- MOPD checkpoints, subject to the open-source boundary.
