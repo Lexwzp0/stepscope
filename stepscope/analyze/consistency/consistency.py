@@ -3,8 +3,9 @@
 One row per (probe_set, probe_version, observable, step_from, step_to) and per prediction kind:
 
 - ``first_order`` vs ``actual``: approximation error of the first-order prediction;
-- ``ch1_ch2`` vs ``first_order`` (chain level 1) and vs ``actual``: the LDCL channel prediction, summed over
-  sources and channel sites of the ``channels`` table;
+- ``ch1_ch2`` vs ``first_order_loss`` when a separate loss-only reference is available; otherwise vs
+  ``first_order`` (chain level 1) and ``actual``. The channel prediction sums over sources and sites and
+  excludes weight decay, so it is not directly compared to the full actual update when decay is present;
 - ``decomposition_sum`` per ``decomp_id``: Σ parts of the ``contributions`` rows vs ``actual`` for the
   approximation error, and vs the decomposition's own ``target`` column (first_order or actual) for the
   alignment residual ``resid_target_minus_sum``. Every decomposition goes through the same rule.
@@ -20,7 +21,7 @@ import numpy as np
 
 from ...core.registry import ANALYSES
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 _GROUP = ("probe_set", "probe_version", "observable", "step_from", "step_to")
 
 
@@ -79,7 +80,7 @@ def channel_totals(channel_rows: list[dict]) -> dict[tuple, float]:
 
 
 def channel_consistency_rows(effects_rows: list[dict], channel_rows: list[dict], prov: dict) -> list[dict]:
-    """Chain level 1 (``ch1_ch2`` vs ``first_order``) and the direct comparison with ``actual``."""
+    """Compare channels with the loss-only reference when present; preserve legacy zero-decay comparisons."""
     tot = channel_totals(channel_rows)
     groups: dict[tuple, list[tuple[dict, float]]] = defaultdict(list)
     for r in effects_rows:
@@ -88,10 +89,13 @@ def channel_consistency_rows(effects_rows: list[dict], channel_rows: list[dict],
             groups[_key(r)].append((r, tot[k]))
     out = []
     for key, pairs in sorted(groups.items()):
-        fo = [(r, p) for r, p in pairs if _finite(r.get("first_order"))]
-        out.append(_row(key, "ch1_ch2", "first_order",
-                        summarize([r["first_order"] for r, _ in fo], [p for _, p in fo]), prov))
-        out.append(_row(key, "ch1_ch2", "actual", summarize([r["actual"] for r, _ in pairs], [p for _, p in pairs]), prov))
+        reference = "first_order_loss" if any(_finite(r.get("first_order_loss")) for r, _ in pairs) else "first_order"
+        fo = [(r, p) for r, p in pairs if _finite(r.get(reference))]
+        out.append(_row(key, "ch1_ch2", reference,
+                        summarize([r[reference] for r, _ in fo], [p for _, p in fo]), prov))
+        if reference == "first_order":
+            out.append(_row(key, "ch1_ch2", "actual",
+                            summarize([r["actual"] for r, _ in pairs], [p for _, p in pairs]), prov))
     return out
 
 

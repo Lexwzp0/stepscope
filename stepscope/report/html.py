@@ -202,6 +202,8 @@ def render_step_report(store: Store, run_id: str, meta: dict, out_path: str | Pa
     chans = _select(store.read(run_id, "channels").to_pylist(), **sel)
     contribs = _select(store.read(run_id, "contributions").to_pylist(), **sel)
     observables = sorted({r["observable"] for r in effects})
+    has_loss_reference = any(r.get("first_order_loss") is not None and not math.isnan(r["first_order_loss"])
+                             for r in effects)
     domain_of = {r["item"]: r["domain"] for r in effects}
     ch_tot = defaultdict(float)
     for r in chans:
@@ -233,10 +235,15 @@ def render_step_report(store: Store, run_id: str, meta: dict, out_path: str | Pa
         plots.append(scatter_svg([r["actual"] for r in rs], [r["first_order"] for r in rs], [r["item"] for r in rs],
                                  f"{o}: first order vs actual", f"corr={_fmt(c.get('corr'), 4)}  sign={_fmt(c.get('sign_agree'), 3)}"))
         if chans:
-            c = cons_by.get((o, "ch1_ch2", "first_order"), {})
-            plots.append(scatter_svg([r["first_order"] for r in rs], [ch_tot[(r["item"], o)] for r in rs], [r["item"] for r in rs],
-                                     f"{o}: CH1+CH2 vs first order", f"corr={_fmt(c.get('corr'), 4)}  sign={_fmt(c.get('sign_agree'), 3)}",
-                                     x_label="first-order ∇Φ·Δθ_u", y_label="CH1 + CH2"))
+            reference = "first_order_loss" if any(r.get("first_order_loss") is not None for r in rs) else "first_order"
+            channel_rs = [r for r in rs if r.get(reference) is not None]
+            c = cons_by.get((o, "ch1_ch2", reference), {})
+            label = "loss-only first order" if reference == "first_order_loss" else "first order"
+            plots.append(scatter_svg([r[reference] for r in channel_rs], [ch_tot[(r["item"], o)] for r in channel_rs],
+                                     [r["item"] for r in channel_rs], f"{o}: CH1+CH2 vs {label}",
+                                     f"corr={_fmt(c.get('corr'), 4)}  sign={_fmt(c.get('sign_agree'), 3)}",
+                                     x_label="loss-only ∇Φ·Δθ_loss" if reference == "first_order_loss" else "first-order ∇Φ·Δθ_u",
+                                     y_label="CH1 + CH2"))
     plots_html = "<div class='row'>" + "".join(plots) + "</div>"
 
     # --- 3. source × domain
@@ -265,23 +272,36 @@ def render_step_report(store: Store, run_id: str, meta: dict, out_path: str | Pa
     item_rows = "".join(
         f"<tr><td class='l'>{html.escape(r['item'])}</td><td class='l'>{html.escape(r['domain'])}</td><td class='l'>{html.escape(r['observable'])}</td>"
         f"<td>{_fmt(r['value_from'])}</td><td>{_sig(r['actual'], 4)}</td><td>{_sig(r['first_order'], 4)}</td>"
+        + (f"<td>{_sig(r.get('first_order_loss'), 4)}</td>" if has_loss_reference else "")
+        +
         f"<td>{_sig(ch_tot.get((r['item'], r['observable'])), 4) if chans else '–'}</td></tr>" for r in top)
     item_table = ("<table><tr><th class='l'>item</th><th class='l'>domain</th><th class='l'>observable</th><th>Φ before</th>"
-                  "<th>actual</th><th>first order</th><th>CH1 + CH2</th></tr>" + item_rows + "</table>")
+                  "<th>actual</th><th>first order</th>"
+                  + ("<th>loss-only first order</th>" if has_loss_reference else "")
+                  + "<th>CH1 + CH2</th></tr>" + item_rows + "</table>")
 
     keep = ("run_id", "model_type", "capabilities", "objective", "objective_config", "optimizer", "loss", "loss_by_source",
             "grad_norm", "clip_coef", "sources", "n_rows", "n_supervised_tokens", "probe_set", "probe_version", "n_items",
+            "probe_file_version", "render", "chat_template_sha256", "encoding_sha256", "protocol_sha256",
+            "channel_reference",
             "package", "code_hash", "cost_s_total", "peak_mem_gb")
     meta_rows = "".join(f"<tr><td class='l'><b>{html.escape(k)}</b></td><td>{html.escape(json.dumps(meta[k], ensure_ascii=False, default=str) if isinstance(meta[k], (dict, list)) else str(meta[k]))}</td></tr>"
                         for k in keep if k in meta)
     title = f"step {meta['step_from']} → {meta['step_to']} · {meta['probe_set']} ({meta['probe_version']})"
+    chain_title = "Check chain: channels vs loss-only first order; full first order vs actual" if has_loss_reference \
+        else "Check chain: CH1 + CH2 → exact first order → actual"
+    decay_note = ("<p class='note'>Weight decay is included in the full first order and in the source decomposition. "
+                  "CH1 + CH2 represents only the loss-gradient update, so its calibration uses first_order_loss "
+                  "(weight decay excluded). No direct CH1 + CH2 vs actual comparison is reported for this update.</p>") \
+        if has_loss_reference else ""
     doc = f"""<!doctype html><html><head><meta charset='utf-8'><title>StepScope · {html.escape(run_id)} · {html.escape(title)}</title><style>{CSS}</style></head>
 <body><h1>StepScope · {html.escape(run_id)} · {html.escape(title)}</h1>
 <table class='meta'>{meta_rows}</table>
-<h2>1. Check chain: CH1 + CH2 → exact first order → actual</h2>{chain_table}
-<p class='note'>All three refer to the same batch and the same update. First order: JVP at θ along the batch's own update
+<h2>1. {chain_title}</h2>{chain_table}
+<p class='note'>All analyses refer to the same batch and captured update. First order: JVP at θ along the batch's own update
 (SGD: rebuilt from the batch and validated against the measured Δθ; AdamW: the measured Δθ). CH1 + CH2: LDCL channels,
 SGD direction only; κ (embedding token overlap) not computed. Per-source parts of the SGD first order sum to it exactly.</p>
+{decay_note}
 <table class='meta'>{diag_html}</table>
 {('<p><b>Skipped</b></p><ul>' + skip_html + '</ul>') if skip_html else ''}
 <h2>2. Calibration</h2>{plots_html}

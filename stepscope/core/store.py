@@ -36,7 +36,9 @@ class Store:
         files = sorted(d.glob("*.parquet"))
         if not files:
             return table_schema(table).empty_table()
-        return pa.concat_tables([pq.read_table(f) for f in files])
+        # Supply the current schema so optional fields added after an older part was written
+        # become null there, including when legacy and current parts share one run.
+        return pa.concat_tables([pq.read_table(f, schema=table_schema(table)) for f in files])
 
     def record_analysis(self, run_id: str, name: str, version: str, status: str, reasons: list[str] | None = None,
                         context: str | None = None) -> None:

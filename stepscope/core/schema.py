@@ -21,6 +21,7 @@ TABLES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("domain", pa.string()), ("observable", pa.string()),
         ("value_from", pa.float64()), ("value_to", pa.float64()),
         ("actual", pa.float64()), ("first_order", pa.float64()),
+        ("first_order_loss", pa.float64()),  # nullable; SGD loss-only tangent, excluding nonzero weight decay
         ("method", pa.string()),      # how first_order was computed: jvp | backward | none
     ],
     # effects row × one component of one decomposition (source, momentum, weight decay, layer, teacher direction).
@@ -37,7 +38,8 @@ TABLES: dict[str, list[tuple[str, pa.DataType]]] = {
         ("contrib", pa.float64()), ("method", pa.string()),
     ],
     # effects row × one source × one channel site. ch1 / ch2 are already multiplied by the effective step size,
-    # so Σ over sources and sites of (ch1 + ch2) is the channel prediction in the units of effects.first_order.
+    # so Σ over sources and sites of (ch1 + ch2) predicts the loss-gradient effect in observable units.
+    # With weight decay, compare to effects.first_order_loss rather than the full-update first_order.
     # layer = "readout" carries CH1 (ch2 = 0); layer = a residual-branch site carries that site's CH2 (ch1 = 0).
     "channels": [
         ("step_from", pa.int64()), ("step_to", pa.int64()),
@@ -64,14 +66,15 @@ TABLES: dict[str, list[tuple[str, pa.DataType]]] = {
     ],
     # one probe set × one update/interval × one prediction or one decomposition.
     # corr / sign_agree / resid_* compare ``prediction`` with ``reference`` (actual unless stated; the channel
-    # check of chain level 1 compares ch1_ch2 with first_order). For a decomposition, prediction is Σ parts and
+    # check of chain level 1 compares ch1_ch2 with first_order_loss when available, otherwise first_order).
+    # For a decomposition, prediction is Σ parts and
     # resid_target_minus_sum is the RMS of (target − Σ parts), target read from the decomposition's rows.
     "consistency": [
         ("step_from", pa.int64()), ("step_to", pa.int64()),
         ("probe_set", pa.string()), ("probe_version", pa.string()), ("observable", pa.string()),
         ("prediction", pa.string()),  # first_order | ch1_ch2 | decomposition_sum
         ("decomp_id", pa.string()),   # null unless prediction == decomposition_sum
-        ("reference", pa.string()),   # actual | first_order
+        ("reference", pa.string()),   # actual | first_order | first_order_loss
         ("n", pa.int64()),
         ("corr", pa.float64()), ("sign_agree", pa.float64()),
         ("resid_actual_minus_pred", pa.float64()),   # mean of (reference - prediction)

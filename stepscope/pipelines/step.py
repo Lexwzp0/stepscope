@@ -7,6 +7,7 @@ adapter (loss, loss_by_source, force); this module and the analyses never branch
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -31,11 +32,11 @@ from ..core.provenance import code_hash, provenance
 from ..core.registry import OBJECTIVES
 from ..core.store import Store
 from ..observe.probes import RenderConfig, load_probe_file, select_items
-from ..observe.scoring import encode_probes
+from ..observe.scoring import EncodedProbes, encode_probes
 from ..report.html import render_step_report
 from .interval import _peak_memory_gb, _slug, describe_checkpoint, shard_tag
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 DECOMP_ID = "sgd_by_source"
 
 
@@ -68,6 +69,30 @@ class StepArgs:
 def default_run_id(checkpoint: str, objective: str, optimizer: str) -> str:
     name, _ = describe_checkpoint(checkpoint)
     return f"{_slug(name)}__{objective}_{optimizer}"
+
+
+def _fingerprint(value) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _probe_protocol(tokenizer, render: RenderConfig, enc: EncodedProbes) -> dict:
+    """Freeze the effective rendering and encoding, including the selected chat template."""
+    template = None
+    if render.chat_template:
+        get_template = getattr(tokenizer, "get_chat_template", None)
+        template = get_template() if callable(get_template) else getattr(tokenizer, "chat_template", None)
+    protocol = {
+        "render": asdict(render),
+        "chat_template_sha256": _fingerprint(template) if template is not None else None,
+        "prompts_sha256": _fingerprint(enc.prompts),
+        "encoding_sha256": _fingerprint({
+            "item_ids": enc.item_ids, "input_ids": enc.id_lists, "option_ids": enc.option_ids.tolist(),
+            "correct_idx": enc.correct_idx.tolist(), "labels": list(enc.labels), "pad_id": enc.pad_id,
+        }),
+    }
+    protocol["protocol_sha256"] = _fingerprint(protocol)
+    return protocol
 
 
 def run_step(a: StepArgs) -> dict:
@@ -111,12 +136,21 @@ def run_step_on(adapter, objective, batch, opt: OptimizerConfig, *, probes_path:
     run_dir = store.run_dir(run_id)
     probes = select_items(load_probe_file(probes_path), max_items)
     enc = encode_probes(adapter.tokenizer, probes.items, render)
+    protocol = _probe_protocol(adapter.tokenizer, render, enc)
+    # The file alone does not identify the observable: the answer prefix, chat template and
+    # tokenization also matter. Keep the raw file/subset version separately for provenance.
+    probe_version = f"{probes.version}-p{protocol['protocol_sha256'][:12]}"
     step_from, step_to = step, step + 1
-    tag = shard_tag(step_from, step_to, probes.version)
+    tag = shard_tag(step_from, step_to, probe_version)
+    probe_meta = {
+        "probe_set": probes.name, "probe_version": probe_version, "probe_file_version": probes.version,
+        "probe_file": str(probes_path), "max_items": max_items, **protocol,
+        "labels": list(enc.labels), "option_ids_unique": sorted(set(enc.option_ids.flatten().tolist())),
+    }
 
     with iv.Timer() as t_step:
         pkg = take_step(adapter.model, objective, batch, opt, run_id=run_id, step=step, pre_params_ref=pre_params_ref)
-    pkg.meta = {**(meta or {}), "model_type": getattr(adapter, "model_type", "")}
+    pkg.meta = {**(meta or {}), "model_type": getattr(adapter, "model_type", ""), "probe_protocol": probe_meta}
     pkg_dir = None
     if save_package:
         pkg_dir = run_dir / f"package_{step}"
@@ -125,36 +159,48 @@ def run_step_on(adapter, objective, batch, opt: OptimizerConfig, *, probes_path:
     res = ss.run_chain(adapter, objective, pkg, enc, names, batch_size=batch_size, by_source=by_source, channels=channels)
     peak = _peak_memory_gb(str(adapter.device))
     mem = 0.0 if math.isnan(peak) else peak
-    keys = dict(step_from=step_from, step_to=step_to, probe_set=probes.name, probe_version=probes.version)
+    keys = dict(step_from=step_from, step_to=step_to, probe_set=probes.name, probe_version=probe_version)
 
     prov_eff = provenance(run_id, "dynamics.single_step", ss.VERSION, "first_order", res.costs.get("first_order", 0.0), mem)
     eff_rows = iv.effects_rows(enc, names, res.phi_from, res.phi_to, res.first_order, prov=prov_eff, method="jvp", **keys)
+    if res.first_order_loss is not None:
+        loss_effects = {(item, observable): float(res.first_order_loss[oi, i])
+                        for oi, observable in enumerate(names) for i, item in enumerate(enc.item_ids)}
+        for row in eff_rows:
+            row["first_order_loss"] = loss_effects[(row["item"], row["observable"])]
     store.write(run_id, "effects", eff_rows, part=tag)
     store.record_analysis(run_id, "dynamics.single_step", ss.VERSION, "ran", context=tag)
     prov_beh = provenance(run_id, "observe.score", VERSION, "exact", res.costs.get("observe", 0.0), mem)
     for s, scored in ((step_from, res.scored_from), (step_to, res.scored_to)):
         store.write(run_id, "behavior", iv.behavior_rows(enc, scored, step=s, probe_set=probes.name,
-                                                          probe_version=probes.version, prov=prov_beh),
-                    part=f"{s}_{probes.version}")
+                                                          probe_version=probe_version, prov=prov_beh),
+                    part=f"{s}_{probe_version}")
 
     ch_rows: list[dict] = []
     if res.channel_preds is not None:
         prov_ch = provenance(run_id, ch.LdclChannels.name, ch.VERSION, "channel", res.costs.get("channels", 0.0), mem)
         ch_rows = ch.channel_rows(enc, names, res.channel_preds, source_kind=batch.source_kind, applicability="sgd",
                                   prov=prov_ch, **keys)
-        store.write(run_id, "channels", ch_rows, part=tag)
+    store.write(run_id, "channels", ch_rows, part=tag)
     co_rows: list[dict] = []
     if res.contributions:
         prov_co = provenance(run_id, "dynamics.sgd_source_decomposition", ss.VERSION, "first_order",
                              res.costs.get("gradients_and_sources", 0.0), mem)
         co_rows = ss.contribution_rows(enc, names, res.contributions, source_kind=batch.source_kind, prov=prov_co,
                                        decomp_id=DECOMP_ID, **keys)
-        store.write(run_id, "contributions", co_rows, part=tag)
-    for an, why in res.skipped.items():
-        store.record_analysis(run_id, an, ss.VERSION, "skipped", reasons=why, context=tag)
+    store.write(run_id, "contributions", co_rows, part=tag)
+    # An empty result must replace both an old table and its old "ran" status on rerun.
     for an, rows in ((ch.LdclChannels.name, ch_rows), ("dynamics.sgd_source_decomposition", co_rows)):
         if rows:
+            res.skipped.pop(an, None)
             store.record_analysis(run_id, an, ss.VERSION, "ran", context=tag)
+        elif an not in res.skipped:
+            reason = "per-source decomposition not requested" if an.endswith("sgd_source_decomposition") and not by_source \
+                else "analysis produced no rows"
+            res.skipped[an] = [reason]
+    for an, why in res.skipped.items():
+        store.record_analysis(run_id, an, ss.VERSION, "skipped", reasons=why, context=tag)
+    store._edit_manifest(run_id, lambda d: d.setdefault("probe_protocols", {}).__setitem__(tag, probe_meta))
 
     prov_con = provenance(run_id, "consistency.consistency", CONS_VERSION, "exact")
     con_rows = consistency_rows(eff_rows, prov_con) + channel_consistency_rows(eff_rows, ch_rows, prov_con) \
@@ -163,13 +209,15 @@ def run_step_on(adapter, objective, batch, opt: OptimizerConfig, *, probes_path:
 
     cost = time.perf_counter() - t0
     summary = {
+        **(meta or {}),
         "run_id": run_id, "kind": "single_step", "step_from": step_from, "step_to": step_to, "tag": tag,
-        "probe_set": probes.name, "probe_version": probes.version, "n_items": len(enc), "observables": list(names),
+        **probe_meta, "n_items": len(enc), "observables": list(names),
         "model_type": getattr(adapter, "model_type", ""), "capabilities": sorted(adapter.capabilities),
-        "objective": objective.name, "objective_config": objective.config(), "optimizer": asdict(opt),
+        "objective": objective.name, "objective_config": objective.config(), "optimizer": asdict(pkg.optimizer),
         "loss": pkg.loss, "loss_by_source": pkg.loss_by_source, "grad_norm": pkg.grad_norm, "clip_coef": pkg.clip_coef,
         "source_kind": batch.source_kind, "sources": batch.source_names(), "n_rows": len(batch),
         "n_supervised_tokens": int(batch.loss_mask.sum()), "method": "jvp",
+        "channel_reference": "first_order_loss" if res.first_order_loss is not None else "first_order",
         "diagnostics": res.diagnostics, "skipped": res.skipped,
         "consistency": {f"{r['prediction']}{'[' + r['decomp_id'] + ']' if r['decomp_id'] else ''}→{r['reference']}"
                         f":{r['observable']}": {k: r[k] for k in ("n", "corr", "sign_agree", "resid_rms", "actual_rms",
@@ -177,9 +225,10 @@ def run_step_on(adapter, objective, batch, opt: OptimizerConfig, *, probes_path:
         "package": str(pkg_dir) if pkg_dir else None, "code_hash": code_hash(),
         "cost_s_total": round(cost, 3), "cost_s_step": round(t_step.seconds, 3),
         "cost_s": {k: round(v, 3) for k, v in res.costs.items()},
-        "peak_mem_gb": None if math.isnan(peak) else round(peak, 3), **(meta or {}),
+        "peak_mem_gb": None if math.isnan(peak) else round(peak, 3),
     }
-    doc = json.dumps({"summary": summary}, ensure_ascii=False, indent=2, default=str)
+    doc = json.dumps({"summary": summary, "render": asdict(render), "probe_protocol": probe_meta},
+                     ensure_ascii=False, indent=2, default=str)
     (run_dir / f"step_{tag}.json").write_text(doc, encoding="utf-8")
     (run_dir / "step.json").write_text(doc, encoding="utf-8")
     report_path = Path(report) if report else run_dir / f"report_step_{tag}.html"

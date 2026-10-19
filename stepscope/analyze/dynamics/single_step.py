@@ -9,7 +9,9 @@ All three refer to the same batch and the same update:
                 objective and the recorded clip coefficient c, and validated against the measured Δθ before use
                 (fallback: the measured Δθ, recorded). AdamW: the measured Δθ;
 - channels:     η c S_u(o) with S = CH1 + CH2 per source and site (SGD only; needs the adapter's ``readout`` and
-                ``residual_inputs``). Diagnostic: η c S1 must equal the JVP along the readout part of Δθ_u.
+                ``residual_inputs``). These estimate only the loss-gradient effect; when weight decay is nonzero,
+                ``first_order_loss`` is the matching exact reference. Diagnostic: η c S1 must equal the JVP
+                along the loss-gradient readout part of Δθ_u.
 
 Under SGD the first-order effect also splits exactly by source, Δθ_u = Σ_d −η c ∇L_d (+ weight decay), written
 to ``contributions`` with target = first_order. Everything model- or loss-specific goes through the adapters.
@@ -46,6 +48,7 @@ class ChainResult:
     diagnostics: dict = field(default_factory=dict)
     skipped: dict[str, list[str]] = field(default_factory=dict)
     costs: dict[str, float] = field(default_factory=dict)
+    first_order_loss: torch.Tensor | None = None     # optional SGD reference excluding weight decay
 
 
 def _grads(model, objective, batch, by_source: bool):
@@ -86,6 +89,7 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
     batch = pkg.batch.to(dev)
     eta = opt.lr * pkg.clip_coef
     costs, diag, skipped = {}, {}, {}
+    diag["readout_tied"] = bool(getattr(adapter, "readout_tied", False))
 
     load_params(model, pkg.pre_params)
     with iv.Timer() as t:
@@ -98,6 +102,7 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
     costs["observe"] = t.seconds
 
     contributions: dict[str, torch.Tensor] = {}
+    decay_effect = None
     measured = pkg.delta
     if sgd:
         with iv.Timer() as t:
@@ -120,8 +125,12 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
                 readout_tangent = {ro: total[ro].clone()}
             if opt.weight_decay:
                 wd = {k: -opt.lr * opt.weight_decay * p.detach().float() for k, p in model.named_parameters()}
+                # CH1/CH2 estimate the loss-gradient update, so the CH2 reference must exclude decay
+                # even when per-source reporting is disabled. The full update tangent still includes it.
+                if split or channels:
+                    _, decay_effect = iv.first_order_jvp(model, wd, enc, names, batch_size)
                 if split:
-                    _, contributions["weight_decay"] = iv.first_order_jvp(model, wd, enc, names, batch_size)
+                    contributions["weight_decay"] = decay_effect
                 for k, v in wd.items():
                     total[k].add_(v)
                 del wd
@@ -152,6 +161,8 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
         phi_from2, dphi = iv.first_order_jvp(model, tangent, enc, names, batch_size)
     costs["first_order"] = t.seconds
     diag["phi_from_recompute_max_gap"] = float((phi_from2 - s_from["phi"]).abs().max())
+    first_order_loss = (dphi - decay_effect
+                        if diag["tangent"] == "reconstructed_sgd" and decay_effect is not None else None)
 
     preds, ch_total = None, None
     reasons = []
@@ -177,17 +188,25 @@ def run_chain(adapter, objective, pkg: StepPackage, enc: EncodedProbes, names: S
             diag["readout_channel_check"] = {"max_abs_err": err, "max_abs_jvp": float(d_ro.abs().max()),
                                              "rel_err": err / max(float(d_ro.abs().max()), 1e-30),
                                              "readout_tied": bool(getattr(adapter, "readout_tied", False))}
-            # CH2 against the exact first-order effect of everything except the readout (the part CH2 estimates)
-            backbone, ch2 = dphi - d_ro, ch_total - s1
+            # CH2 estimates the loss-gradient effect outside the readout, excluding weight decay.
+            loss_effect = dphi if first_order_loss is None else first_order_loss
+            backbone, ch2 = loss_effect - d_ro, ch_total - s1
             diag["ch2_vs_backbone_first_order"] = {
                 o: {**{k: summarize(backbone[i], ch2[i])[k] for k in ("corr", "sign_agree")},
                     "rms_ch1": float(s1[i].pow(2).mean().sqrt()), "rms_ch2": float(ch2[i].pow(2).mean().sqrt()),
                     "rms_backbone_first_order": float(backbone[i].pow(2).mean().sqrt())}
                 for i, o in enumerate(names)}
+        elif diag["readout_tied"]:
+            skipped["diagnostics.readout_channel_check"] = [
+                "tied input/readout weights: the shared parameter also changes the input path, so the "
+                "parameter-based check cannot isolate a readout-only tangent"]
+            skipped["diagnostics.ch2_vs_backbone_first_order"] = [
+                "tied input/readout weights: the exact non-readout loss reference requires the unavailable "
+                "readout-only parameter JVP"]
         diag["kappa"] = "not computed"
     return ChainResult(phi_from=s_from["phi"], phi_to=s_to["phi"], first_order=dphi, channels=ch_total,
                        channel_preds=preds, contributions=contributions, scored_from=s_from, scored_to=s_to,
-                       diagnostics=diag, skipped=skipped, costs=costs)
+                       diagnostics=diag, skipped=skipped, costs=costs, first_order_loss=first_order_loss)
 
 
 def contribution_rows(enc: EncodedProbes, names: Sequence[str], parts: dict[str, torch.Tensor], *, step_from: int,

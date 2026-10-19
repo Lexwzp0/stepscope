@@ -7,7 +7,7 @@ Pure SGD (no momentum) by default, matching the LDCL validation protocol; AdamW 
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import torch
@@ -71,9 +71,24 @@ def _state_to_cpu(state: dict) -> dict:
                           for k, v in state.items()})
 
 
+def _effective_optimizer_config(optim, requested: OptimizerConfig) -> OptimizerConfig:
+    """Optimizer state wins over constructor settings; clipping remains a capture setting.
+
+    ``build`` creates one parameter group, and ``load_state_dict`` requires the same group count.
+    Keep an independent snapshot so later caller edits cannot change the recorded update.
+    """
+    group = optim.param_groups[0]
+    effective = replace(requested, lr=float(group["lr"]), weight_decay=float(group["weight_decay"]))
+    if requested.name == "adamw":
+        effective = replace(effective, betas=tuple(float(v) for v in group["betas"]), eps=float(group["eps"]))
+    return effective
+
+
 def take_step(model, objective, batch: TrainBatch, opt: OptimizerConfig, *, run_id: str = "", step: int = 0,
               optimizer_state: dict | None = None, pre_params_ref: str | None = None) -> StepPackage:
-    """Run one optimizer step on ``model`` in place (it ends at θ_after) and return the package."""
+    """Run one optimizer step in place. Loaded state overrides ``opt``'s optimizer settings;
+    ``max_grad_norm`` still comes from ``opt`` because clipping is outside the optimizer.
+    """
     names = [k for k, _ in model.named_parameters()]
     params = [p for _, p in model.named_parameters()]
     pre = {k: p.detach().to("cpu", copy=True) for k, p in zip(names, params)}
@@ -85,6 +100,7 @@ def take_step(model, objective, batch: TrainBatch, opt: OptimizerConfig, *, run_
     optim = opt.build(params)
     if optimizer_state is not None:
         optim.load_state_dict(optimizer_state)
+    effective_opt = _effective_optimizer_config(optim, opt)
     state_pre = _state_to_cpu(optim.state_dict())
     try:
         batch_dev = batch.to(params[0].device)
@@ -106,7 +122,7 @@ def take_step(model, objective, batch: TrainBatch, opt: OptimizerConfig, *, run_
     delta = {k: (p.detach().float().cpu() - pre[k].float()) for k, p in zip(names, params)}
     del optim
     return StepPackage(run_id=run_id, optimizer_step=step, pre_params=pre, delta=delta, optimizer_state_pre=state_pre,
-                       batch=batch, objective=objective.name, objective_config=objective.config(), optimizer=opt,
+                       batch=batch, objective=objective.name, objective_config=objective.config(), optimizer=effective_opt,
                        loss=float(loss.detach()), loss_by_source=by_source, grad_norm=grad_norm, clip_coef=clip_coef,
                        pre_params_ref=pre_params_ref)
 
