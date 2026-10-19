@@ -15,16 +15,16 @@ calibration plots, changes by domain, and source contributions for SGD.
 
 One MOPD step on [SmolLM3-3B MixSFT](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT),
 measured on **20 MMLU-Redux questions × 4 answer rotations**. The two observables
-track answer-format probability (Φ_fmt) and correct-versus-wrong preference (Φ_ans).
+track answer-format probability ($\Phi_{\mathrm{fmt}}$) and correct-versus-wrong preference ($\Phi_{\mathrm{ans}}$).
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/real_case_calibration_dark.png">
-  <img alt="First-order prediction vs actual change for SGD and AdamW at two step sizes" src="docs/img/real_case_calibration_light.png" width="640">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/real_case_calibration_dark.svg">
+  <img alt="First-order prediction vs actual change for SGD and AdamW at two step sizes" src="docs/img/real_case_calibration_light.svg" width="800">
 </picture>
 
 At the smaller step sizes, first-order prediction reaches **≤ 2.2% normalized max
-error** for both optimizers. At AdamW lr `1.5e-6`, it is 26–27%: step size matters.
-Error here is `max|prediction − actual| / max|actual|`, across all 80 rows per
+error** for both optimizers. At AdamW $\eta = 1.5 \times 10^{-6}$, it is 26–27%: step size matters.
+Error here is $\max_i|\widehat{\Delta\Phi}_i-\Delta\Phi_i|/\max_i|\Delta\Phi_i|$, across all 80 rows per
 observable, not a per-item relative error bound.
 
 This is a controlled single-step case with fresh optimizer state. The approximate

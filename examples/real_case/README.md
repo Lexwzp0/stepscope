@@ -101,6 +101,9 @@ python examples/run_real_case.py --optimizer adamw --lr 1.5e-7 --run-id adamw_lr
 python examples/real_case/plot_calibration.py runs/real_case/results --out docs/img   # needs matplotlib, pandas
 ```
 
+The plot script exports light and dark SVGs for the README, plus PNG copies.
+Matplotlib renders the formulas directly; no LaTeX installation is needed.
+
 The student uses tied input/output embeddings. The adapter supports its module
 layout, but the independent readout-channel exactness check is skipped for tied
 weights. Preserve that fact in the report.
